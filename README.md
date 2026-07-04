@@ -20,7 +20,7 @@ git pull --ff-only origin main
 3. Build and start the Docker stack:
 
 ```bash
-docker-compose up -d --build
+APP_PORT=3001 docker-compose up -d --build
 ```
 
 4. Check the container status:
@@ -45,8 +45,16 @@ That script will:
 
 The script auto-detects `docker-compose` first, then falls back to `docker compose` if your server has the plugin installed.
 
+If you want a different host port, set `APP_PORT` explicitly, for example:
+
+```bash
+APP_PORT=3002 bash scripts/deploy.sh
+```
+
 ## HTTPS / nginx
 
 Use `nginx.bot.derinance.com.ssl.conf.example` on the host nginx side.
 
-Replace the certificate paths with your real Let’s Encrypt files, then reload nginx.
+It proxies HTTPS traffic to the Docker container on `127.0.0.1:3001`.
+
+Do not enable the SSL server block until Let’s Encrypt has issued the certs for `bot.derinance.com`.
