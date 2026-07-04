@@ -23,6 +23,18 @@ git pull --ff-only origin main
 APP_PORT=3001 docker-compose up -d --build
 ```
 
+For faster repeated deploys, prefer the deploy script without a forced clean rebuild:
+
+```bash
+APP_PORT=3001 bash scripts/deploy.sh
+```
+
+If you need to invalidate Docker cache because of a dependency or build issue:
+
+```bash
+FORCE_REBUILD=1 APP_PORT=3001 bash scripts/deploy.sh
+```
+
 4. Check the container status:
 
 ```bash
@@ -44,12 +56,7 @@ That script will:
 3. Restart the container in detached mode.
 
 The script auto-detects `docker-compose` first, then falls back to `docker compose` if your server has the plugin installed.
-
-If you want a different host port, set `APP_PORT` explicitly, for example:
-
-```bash
-APP_PORT=3002 bash scripts/deploy.sh
-```
+It keeps Docker layer cache on by default so repeated deploys are much faster.
 
 ## HTTPS / nginx
 

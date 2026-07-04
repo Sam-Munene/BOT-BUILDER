@@ -20,7 +20,11 @@ echo "Stopping any running stack..."
 "${COMPOSE_CMD[@]}" down || true
 
 echo "Building production image..."
-"${COMPOSE_CMD[@]}" build --no-cache
+if [ "${FORCE_REBUILD:-0}" = "1" ]; then
+  "${COMPOSE_CMD[@]}" build --no-cache
+else
+  "${COMPOSE_CMD[@]}" build
+fi
 
 echo "Starting services..."
 "${COMPOSE_CMD[@]}" up -d
