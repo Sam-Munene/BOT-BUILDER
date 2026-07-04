@@ -5,7 +5,7 @@ services:
     container_name: bot-builder
     restart: always
     ports:
-      - "${APP_PORT:-3001}:80"
+      - "${APP_PORT:-8085}:80"
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost || exit 1"]
       interval: 30s
