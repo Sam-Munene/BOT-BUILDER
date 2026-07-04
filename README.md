@@ -20,13 +20,13 @@ git pull --ff-only origin main
 3. Build and start the Docker stack:
 
 ```bash
-docker compose up -d --build
+docker-compose up -d --build
 ```
 
 4. Check the container status:
 
 ```bash
-docker compose ps
+docker-compose ps
 ```
 
 ## One-command deploy
@@ -42,6 +42,8 @@ That script will:
 1. Pull the latest GitHub changes.
 2. Rebuild the Docker image.
 3. Restart the container in detached mode.
+
+The script auto-detects `docker-compose` first, then falls back to `docker compose` if your server has the plugin installed.
 
 ## HTTPS / nginx
 
