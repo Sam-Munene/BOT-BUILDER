@@ -593,10 +593,6 @@ class BotBuilderApp {
               <div>
                 <div class="bb-workbench-kicker">Workspace</div>
               </div>
-              <div class="bb-workbench-meta">
-                <span id="bb-block-count">0 blocks</span>
-                <span id="bb-last-updated">Idle</span>
-              </div>
             </div>
             <div class="bb-workspace-shell">
               <div id="bb-workspace" class="bb-workspace"></div>
@@ -1536,12 +1532,9 @@ class BotBuilderApp {
     this.lastSnapshot = snapshot;
     this.strategyXml = this.serializeWorkspaceXml();
 
-    const blockCount = this.workspace.getAllBlocks(false).length;
     const topbarStatus = this.root.querySelector<HTMLElement>("#bb-topbar-status");
     const statusPill = this.root.querySelector<HTMLElement>("#bb-status-pill");
     const statusCaption = this.root.querySelector<HTMLElement>("#bb-status-caption");
-    const blockCountEl = this.root.querySelector<HTMLElement>("#bb-block-count");
-    const lastUpdatedEl = this.root.querySelector<HTMLElement>("#bb-last-updated");
     const jsonEl = this.root.querySelector<HTMLElement>("#bb-strategy-json");
     const payloadEl = this.root.querySelector<HTMLElement>("#bb-payload-json");
     const resultsEl = this.root.querySelector<HTMLElement>("#bb-results");
@@ -1559,14 +1552,6 @@ class BotBuilderApp {
 
     if (payloadEl) {
       payloadEl.textContent = snapshot.apiPayload ? formatJson(snapshot.apiPayload) : "// Incomplete strategy";
-    }
-
-    if (blockCountEl) {
-      blockCountEl.textContent = `${blockCount} blocks`;
-    }
-
-    if (lastUpdatedEl) {
-      lastUpdatedEl.textContent = `Updated ${new Date(snapshot.meta.updatedAt).toLocaleTimeString()}`;
     }
 
     const ready = validation.valid;

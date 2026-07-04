@@ -22,9 +22,9 @@
   --bb-danger: #ef4444;
   --bb-shadow: none;
   --bb-shadow-soft: none;
-  --bb-radius: 20px;
-  --bb-radius-sm: 14px;
-  --bb-radius-xs: 10px;
+  --bb-radius: 24px;
+  --bb-radius-sm: 18px;
+  --bb-radius-xs: 12px;
   font-family: "Manrope", sans-serif;
 }
 
@@ -79,7 +79,7 @@ button {
   align-items: center;
   padding: 12px 14px;
   border: 1px solid var(--bb-border-soft);
-  border-radius: calc(var(--bb-radius) + 2px);
+  border-radius: 28px;
   background: #ffffff;
   box-shadow: none;
   backdrop-filter: none;
@@ -97,7 +97,7 @@ button {
   height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 14px;
+  border-radius: 18px;
   color: #ffffff;
   background: #2146d0;
   font-weight: 800;
@@ -144,7 +144,7 @@ button {
   color: var(--bb-text);
   background: #ffffff;
   border: 1px solid var(--bb-border);
-  border-radius: 14px;
+  border-radius: 18px;
   outline: none;
   box-shadow: none;
 }
@@ -172,7 +172,7 @@ button {
 .bb-btn {
   min-height: 42px;
   padding: 0 16px;
-  border-radius: 13px;
+  border-radius: 16px;
   cursor: pointer;
   color: #ffffff;
   font-weight: 800;
@@ -231,7 +231,7 @@ button {
 .bb-card {
   padding: 16px;
   border: 1px solid var(--bb-border-soft);
-  border-radius: var(--bb-radius);
+  border-radius: 24px;
   background: #ffffff;
   box-shadow: none;
 }
@@ -275,7 +275,7 @@ button {
   color: var(--bb-text);
   text-align: left;
   border: 1px solid var(--bb-border-soft);
-  border-radius: 16px;
+  border-radius: 18px;
   background: #ffffff;
   cursor: pointer;
   transition:
@@ -315,7 +315,7 @@ button {
   align-items: end;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 4px;
+  padding: 4px 6px 0;
 }
 
 .bb-workbench-kicker {
@@ -332,23 +332,6 @@ button {
   line-height: 1.15;
 }
 
-.bb-workbench-meta {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: flex-end;
-}
-
-.bb-workbench-meta span {
-  padding: 10px 14px;
-  color: var(--bb-muted);
-  background: #ffffff;
-  border: 1px solid var(--bb-border-soft);
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .bb-workspace-shell {
   position: relative;
   min-height: 0;
@@ -356,7 +339,7 @@ button {
   min-height: clamp(720px, 79svh, 980px);
   padding: 12px;
   border: 1px solid var(--bb-border-soft);
-  border-radius: calc(var(--bb-radius) + 2px);
+  border-radius: 28px;
   background: #ffffff;
   box-shadow: none;
 }
@@ -372,7 +355,7 @@ button {
 }
 
 .bb-workspace .blocklySvg {
-  border-radius: 16px;
+  border-radius: 24px;
 }
 
 .bb-workspace .blocklyToolboxDiv,
@@ -507,7 +490,7 @@ button {
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--bb-border);
-  border-radius: 18px;
+  border-radius: 26px;
   background: #ffffff;
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
 }
@@ -543,7 +526,7 @@ button {
 .bb-icon-btn {
   min-height: 40px;
   padding: 0 14px;
-  border-radius: 12px;
+  border-radius: 14px;
   color: var(--bb-text);
   cursor: pointer;
   background: #ffffff;
@@ -577,7 +560,7 @@ button {
   color: var(--bb-text);
   background: #ffffff;
   border: 1px solid var(--bb-border);
-  border-radius: 14px;
+  border-radius: 18px;
   outline: none;
 }
 
@@ -612,7 +595,7 @@ button {
   gap: 7px;
   padding: 9px;
   border: 1px solid var(--bb-border-soft);
-  border-radius: 18px;
+  border-radius: 22px;
   background: #ffffff;
 }
 
@@ -655,7 +638,7 @@ button {
 
 .bb-group-empty {
   padding: 10px;
-  border-radius: 14px;
+  border-radius: 16px;
   color: var(--bb-muted);
   font-size: 12px;
   border: 1px dashed var(--bb-border-soft);
@@ -670,7 +653,7 @@ button {
   text-align: left;
   color: var(--bb-text);
   cursor: pointer;
-  border-radius: 18px;
+  border-radius: 20px;
   border: 1px solid var(--bb-border-soft);
   background: #ffffff;
   transition:
@@ -795,7 +778,7 @@ button {
   color: var(--bb-text);
   background: #ffffff;
   border: 1px solid var(--bb-border-soft);
-  border-radius: 12px;
+  border-radius: 16px;
   outline: none;
 }
 
