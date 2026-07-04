@@ -1,0 +1,14 @@
+services:
+  bot-builder:
+    build: .
+    image: bot-builder:latest
+    container_name: bot-builder
+    restart: always
+    ports:
+      - "${APP_PORT:-3000}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

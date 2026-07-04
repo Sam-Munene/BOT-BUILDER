@@ -1,0 +1,13 @@
+node_modules
+server/node_modules
+dist
+server/dist
+coverage
+server/coverage
+*.log
+*.local
+.DS_Store
+.idea
+.vscode
+server/.cache
+server/.turbo

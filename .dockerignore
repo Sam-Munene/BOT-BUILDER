@@ -1,0 +1,12 @@
+node_modules
+server/node_modules
+dist
+server/dist
+coverage
+server/coverage
+*.log
+*.local
+.git
+.gitignore
+.DS_Store
+server/.cache
