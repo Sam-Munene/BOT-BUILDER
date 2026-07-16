@@ -6,6 +6,7 @@ coverage
 server/coverage
 *.log
 *.local
+!.env.local
 .git
 .gitignore
 .DS_Store

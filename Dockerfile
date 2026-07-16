@@ -1,6 +1,10 @@
 # Stage 1: build the Blockly app
 FROM node:20-alpine AS builder
 
+WORKDIR /app
+
+COPY .env.local ./.env.local
+
 WORKDIR /app/server
 
 COPY server/package*.json ./
