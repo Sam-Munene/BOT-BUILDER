@@ -73,10 +73,10 @@ button {
 }
 
 .bb-topbar {
-  display: grid;
-  grid-template-columns: minmax(220px, 1.1fr) minmax(280px, 0.9fr) auto;
-  gap: 14px;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 14px;
   padding: 12px 14px;
   border: 1px solid var(--bb-border-soft);
   border-radius: 28px;
@@ -121,6 +121,7 @@ button {
   align-items: center;
   justify-content: center;
   gap: 12px;
+  flex: 1 1 320px;
   min-width: 0;
 }
 
@@ -149,6 +150,22 @@ button {
   box-shadow: none;
 }
 
+.bb-market-picker input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 14px;
+  color: var(--bb-text);
+  background: #ffffff;
+  border: 1px solid var(--bb-border);
+  border-radius: 18px;
+  outline: none;
+  box-shadow: none;
+}
+
+.bb-token-picker {
+  min-width: 280px;
+}
+
 .bb-topbar-status {
   min-height: 42px;
   display: inline-flex;
@@ -167,6 +184,7 @@ button {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
+  margin-left: auto;
 }
 
 .bb-btn {
@@ -340,18 +358,27 @@ button {
   padding: 12px;
   border: 1px solid var(--bb-border-soft);
   border-radius: 28px;
-  background: #ffffff;
-  box-shadow: none;
+  background:
+    radial-gradient(circle at top left, rgba(33, 70, 208, 0.06), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(23, 155, 109, 0.06), transparent 24%),
+    linear-gradient(180deg, #ffffff 0%, #f8fbff 100%),
+    linear-gradient(rgba(15, 23, 42, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.03) 1px, transparent 1px);
+  background-size: auto, auto, auto, 38px 38px, 38px 38px;
+  background-position: 0 0, 100% 100%, 0 0, 0 0, 0 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  overflow: hidden;
 }
 
 .bb-workspace {
   width: 100%;
   height: 100%;
   min-height: 0;
+  border-radius: 22px;
 }
 
 .bb-workspace .blocklyMainBackground {
-  fill: transparent !important;
+  fill: rgba(255, 255, 255, 0.92) !important;
 }
 
 .bb-workspace .blocklySvg {
@@ -369,8 +396,15 @@ button {
   opacity: 0.78;
 }
 
+.bb-workspace .blocklyFlyoutBackground {
+  fill: rgba(255, 255, 255, 0.92) !important;
+}
+
 .bb-inspector {
-  overflow: hidden;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding-right: 4px;
 }
 
 .bb-status-pill {
@@ -461,6 +495,163 @@ button {
   margin-top: 12px;
   color: #fecaca;
   font-size: 13px;
+}
+
+.bb-result-caption {
+  margin-top: 10px;
+  color: var(--bb-muted);
+  font-size: 13px;
+}
+
+.bb-lifecycle-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.bb-lifecycle-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.03);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.bb-lifecycle-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 84px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.bb-lifecycle-badge.is-ready {
+  color: #14532d;
+  background: #dcfce7;
+}
+
+.bb-lifecycle-badge.is-running {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.bb-lifecycle-badge.is-pending {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.bb-lifecycle-body {
+  display: grid;
+  gap: 8px;
+}
+
+.bb-lifecycle-title {
+  color: var(--bb-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.bb-lifecycle-details {
+  margin-top: 2px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.bb-lifecycle-details summary {
+  cursor: pointer;
+  color: var(--bb-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.bb-lifecycle-raw {
+  margin: 10px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bb-event-log {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.02);
+}
+
+.bb-event-log-title {
+  color: var(--bb-muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.bb-event-log-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.bb-event-log-row {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.bb-event-log-time,
+.bb-event-log-name {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.bb-event-log-time {
+  color: #64748b;
+}
+
+.bb-event-log-name {
+  color: #2146d0;
+}
+
+.bb-event-log-payload {
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bb-event-log-empty {
+  color: var(--bb-muted);
+  font-size: 12px;
+  font-style: italic;
 }
 
 .bb-tip-card p {
@@ -885,12 +1076,17 @@ button {
   }
 
   .bb-topbar {
-    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .bb-topbar-center {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .bb-topbar-status,
+  .bb-topbar-actions {
+    margin-left: 0;
   }
 
   .bb-layout {

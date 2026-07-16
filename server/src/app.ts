@@ -1,12 +1,6 @@
-/**
- * Bot Builder App
- *
- * Custom Blockly workspace with a bespoke category browser, modal palette,
- * and JSON-driven block templates.
- */
-
 import { storageService } from "./services/storage";
 import { validationService } from "./services/validation";
+import { wsService } from "./services/websocket";
 import {
   BLOCK_TEMPLATES,
   BLOCK_TEMPLATES_BY_TYPE,
@@ -66,8 +60,37 @@ type ModalState = {
   templateType: string | null;
 };
 
+type TradeLifecycleStageKey = "order" | "activated" | "expiry";
+
+type TradeLifecycleStage = {
+  key: TradeLifecycleStageKey;
+  title: string;
+  status: "done" | "pending" | "active";
+  timeMs: number;
+  price?: number | null;
+  contractId?: string | number | null;
+  note: string;
+  rawPayload?: Record<string, unknown> | null;
+};
+
+type WsEventLogEntry = {
+  at: number;
+  event: string;
+  payload: unknown;
+};
+
+type ContractTypeRecord = {
+  contract_type: string;
+  contract_display?: string;
+  contract_category: string;
+  contract_category_display?: string;
+  barrier_category?: string;
+  barriers?: number;
+  description?: string;
+};
+
 const SECTION_INPUT_NAMES: Record<SectionId, string> = {
-  market: "MARKET",
+    market: "MARKET",
   execution: "EXECUTION",
   indicators: "INDICATORS",
   conditions: "CONDITIONS",
@@ -86,6 +109,22 @@ const SECTION_BLOCK_TYPES: Record<SectionId, string> = {
 
 const DEFAULT_SYMBOL = "VIX_100";
 const DEFAULT_CATEGORY = "market";
+const AUTH_STORAGE_KEY = "botbuilder-auth-token";
+const AUTH_API_BASE = "http://212.95.35.81:70/api/v1";
+
+type BotBuilderAuthConfig = {
+  token?: string;
+  identifier?: string;
+  password?: string;
+  deviceId?: string;
+  geoLocation?: string;
+  appVersion?: string;
+};
+
+type BotBuilderWindow = Window & {
+  __BOT_BUILDER_AUTH_TOKEN__?: string;
+  __BOT_BUILDER_AUTH__?: Partial<BotBuilderAuthConfig>;
+};
 
 function resolveTarget(target: string | HTMLElement): HTMLElement {
   if (typeof target !== "string") return target;
@@ -106,6 +145,15 @@ function getBlockly(): any {
 
 function safeString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function cloneFields(fields: Record<string, string | number | boolean>): Record<string, string | number | boolean> {
@@ -134,6 +182,10 @@ function getSectionInputName(sectionId: SectionId): string {
 
 function getSectionTitle(sectionId: SectionId): string {
   return SECTION_DEFINITIONS.find((section) => section.id === sectionId)?.title ?? sectionId;
+}
+
+function getBlockFieldValue(block: any, fieldName: string): string {
+  return safeString(block?.getFieldValue?.(fieldName) ?? "");
 }
 
 function getCategoryDefinition(categoryId: string) {
@@ -204,16 +256,12 @@ function buildTemplateJson(template: BlockTemplate): any {
 
     return {
       message0: template.title,
-      message1: "Bot name %1",
-      args1: [buildFieldJson(template.fields[0])],
-      message2: "Mode %1",
-      args2: [buildFieldJson(template.fields[1])],
-      message3: "Market %1  Execution %2",
-      args3: [marketInput, executionInput],
-      message4: "Indicators %1  Conditions %2",
-      args4: [indicatorsInput, conditionsInput],
-      message5: "Restart %1  Utility %2",
-      args5: [restartInput, utilityInput],
+      message1: "Market %1  Execution %2",
+      args1: [marketInput, executionInput],
+      message2: "Indicators %1  Conditions %2",
+      args2: [indicatorsInput, conditionsInput],
+      message3: "Restart %1  Utility %2",
+      args3: [restartInput, utilityInput],
       colour: template.color,
       hat: "cap",
       inputsInline: true,
@@ -222,9 +270,8 @@ function buildTemplateJson(template: BlockTemplate): any {
 
   if (template.layout === "section") {
     return {
-      message0: template.title,
-      message1: "Drop blocks here %1",
-      args1: [{ type: "input_statement", name: "STACK" }],
+      message0: `${template.title} %1`,
+      args0: [{ type: "input_statement", name: "STACK" }],
       previousStatement: null,
       nextStatement: null,
       colour: template.color,
@@ -299,24 +346,20 @@ function toSectionSnapshot(sectionId: SectionId, blocks: SerializedBlock[]): Sec
 function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unknown> {
   const result: Record<string, unknown> = {};
 
-  const marketKind = firstBlockByType(blocks, "market_kind");
   const marketSymbol = firstBlockByType(blocks, "market_symbol");
   const marketCategory = firstBlockByType(blocks, "market_category");
   const marketContract = firstBlockByType(blocks, "market_contract");
-  const marketSync = firstBlockByType(blocks, "market_sync");
   const marketSettings = firstBlockByType(blocks, "market_settings");
   const marketBarrier = firstBlockByType(blocks, "market_barrier");
   const marketDigits = firstBlockByType(blocks, "market_digits");
   const marketRange = firstBlockByType(blocks, "market_range");
 
-  if (marketKind || marketSymbol || marketCategory || marketContract || marketSync || marketSettings || marketBarrier || marketDigits || marketRange) {
+  if (marketSymbol || marketCategory || marketContract || marketSettings || marketBarrier || marketDigits || marketRange) {
     const values = {
       ...(marketSettings?.values ?? {}),
-      ...(marketKind?.values ?? {}),
       ...(marketSymbol?.values ?? {}),
       ...(marketCategory?.values ?? {}),
       ...(marketContract?.values ?? {}),
-      ...(marketSync?.values ?? {}),
       ...(marketBarrier?.values ?? {}),
       ...(marketDigits?.values ?? {}),
       ...(marketRange?.values ?? {}),
@@ -324,10 +367,8 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
 
     result.market = {
       symbol: safeString(values.SYMBOL ?? DEFAULT_SYMBOL),
-      category: safeString(values.CONTRACT_CATEGORY ?? "path_independent"),
+      category: safeString(values.CONTRACT_CATEGORY ?? "PATH_INDEPENDENT"),
       contractType: safeString(values.CONTRACT_TYPE ?? "UP"),
-      marketKind: safeString(values.MARKET_KIND ?? "derived"),
-      liveSync: asBoolean(values.LIVE_SYNC ?? true),
       barrier: values.BARRIER_ENABLED === false ? undefined : asNumber(values.BARRIER_VALUE ?? 2.5, 2.5),
       barrierDirection: safeString(values.BARRIER_DIRECTION ?? "above"),
       barrierMode: safeString(values.BARRIER_MODE ?? "single"),
@@ -342,17 +383,15 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
   const executionStake = firstBlockByType(blocks, "execution_stake");
   const executionDuration = firstBlockByType(blocks, "execution_duration");
   const executionUnit = firstBlockByType(blocks, "execution_unit");
-  const executionRetry = firstBlockByType(blocks, "execution_retry");
   const executionSettings = firstBlockByType(blocks, "execution_settings");
   const executionRisk = firstBlockByType(blocks, "execution_risk");
   const executionWindow = firstBlockByType(blocks, "execution_window");
 
-  if (executionStake || executionDuration || executionUnit || executionRetry || executionSettings || executionRisk || executionWindow) {
+  if (executionStake || executionDuration || executionUnit || executionSettings || executionRisk || executionWindow) {
     const values = {
       ...(executionStake?.values ?? {}),
       ...(executionDuration?.values ?? {}),
       ...(executionUnit?.values ?? {}),
-      ...(executionRetry?.values ?? {}),
       ...(executionSettings?.values ?? {}),
       ...(executionRisk?.values ?? {}),
       ...(executionWindow?.values ?? {}),
@@ -362,7 +401,6 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
       stake: asNumber(values.STAKE ?? 10, 10),
       duration: asNumber(values.DURATION ?? 5, 5),
       durationUnit: safeString(values.DURATION_UNIT ?? "t"),
-      autoRetry: asBoolean(values.AUTO_RETRY ?? true),
       stopLoss: asNumber(values.STOP_LOSS ?? 5, 5),
       takeProfit: asNumber(values.TAKE_PROFIT ?? 10, 10),
       maxStakes: asNumber(values.MAX_STAKES ?? 3, 3),
@@ -374,23 +412,38 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
 
   const indicatorRule = firstBlockByType(blocks, "indicator_rule");
   const indicatorCompare = firstBlockByType(blocks, "indicator_compare");
+  const indicatorsSettings = firstBlockByType(blocks, "indicators_settings");
   const indicators: Array<Record<string, unknown>> = [];
 
-  if (indicatorRule) {
+  if (indicatorsSettings) {
     indicators.push({
-      type: safeString(indicatorRule.values.INDICATOR ?? "rsi"),
-      period: asNumber(indicatorRule.values.PERIOD ?? 14, 14),
-      symbol: safeString(indicatorRule.values.SYMBOL ?? DEFAULT_SYMBOL),
-      active: asBoolean(indicatorRule.values.ACTIVE ?? true),
+      type: safeString(indicatorsSettings.values.INDICATOR ?? "rsi"),
+      period: asNumber(indicatorsSettings.values.PERIOD ?? 14, 14),
+      symbol: safeString(indicatorsSettings.values.SYMBOL ?? DEFAULT_SYMBOL),
+      active: asBoolean(indicatorsSettings.values.ACTIVE ?? true),
     });
-  }
+    indicators.push({
+      left: safeString(indicatorsSettings.values.LEFT ?? "indicator"),
+      operator: safeString(indicatorsSettings.values.OPERATOR ?? "GT"),
+      threshold: asNumber(indicatorsSettings.values.THRESHOLD ?? 50, 50),
+    });
+  } else {
+    if (indicatorRule) {
+      indicators.push({
+        type: safeString(indicatorRule.values.INDICATOR ?? "rsi"),
+        period: asNumber(indicatorRule.values.PERIOD ?? 14, 14),
+        symbol: safeString(indicatorRule.values.SYMBOL ?? DEFAULT_SYMBOL),
+        active: asBoolean(indicatorRule.values.ACTIVE ?? true),
+      });
+    }
 
-  if (indicatorCompare) {
-    indicators.push({
-      left: safeString(indicatorCompare.values.LEFT ?? "indicator"),
-      operator: safeString(indicatorCompare.values.OPERATOR ?? "GT"),
-      threshold: asNumber(indicatorCompare.values.THRESHOLD ?? 50, 50),
-    });
+    if (indicatorCompare) {
+      indicators.push({
+        left: safeString(indicatorCompare.values.LEFT ?? "indicator"),
+        operator: safeString(indicatorCompare.values.OPERATOR ?? "GT"),
+        threshold: asNumber(indicatorCompare.values.THRESHOLD ?? 50, 50),
+      });
+    }
   }
 
   result.indicators = indicators;
@@ -398,49 +451,81 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
   const purchaseCondition = firstBlockByType(blocks, "purchase_condition");
   const sellCondition = firstBlockByType(blocks, "sell_condition");
   const logicGate = firstBlockByType(blocks, "logic_gate");
+  const conditionsSettings = firstBlockByType(blocks, "conditions_settings");
 
-  result.conditions = {
-    purchase: purchaseCondition
-      ? {
-          type: safeString(purchaseCondition.values.TRIGGER ?? "ALWAYS"),
-          value: safeString(purchaseCondition.values.VALUE ?? ""),
-          invert: asBoolean(purchaseCondition.values.INVERT ?? false),
-        }
-      : null,
-    sell: sellCondition
-      ? {
-          type: safeString(sellCondition.values.TRIGGER ?? "ALWAYS"),
-          value: safeString(sellCondition.values.VALUE ?? ""),
-          invert: asBoolean(sellCondition.values.INVERT ?? false),
-        }
-      : null,
-    logic: logicGate
-      ? [
+  result.conditions = conditionsSettings
+    ? {
+        purchase: {
+          type: safeString(conditionsSettings.values.PURCHASE_TRIGGER ?? "ALWAYS"),
+          value: safeString(conditionsSettings.values.PURCHASE_VALUE ?? ""),
+          invert: asBoolean(conditionsSettings.values.PURCHASE_INVERT ?? false),
+        },
+        sell: {
+          type: safeString(conditionsSettings.values.SELL_TRIGGER ?? "ALWAYS"),
+          value: safeString(conditionsSettings.values.SELL_VALUE ?? ""),
+          invert: asBoolean(conditionsSettings.values.SELL_INVERT ?? false),
+        },
+        logic: [
           {
-            operator: safeString(logicGate.values.OPERATOR ?? "AND"),
-            negate: asBoolean(logicGate.values.NEGATE ?? false),
+            operator: safeString(conditionsSettings.values.LOGIC_OPERATOR ?? "AND"),
+            negate: asBoolean(conditionsSettings.values.LOGIC_NEGATE ?? false),
           },
-        ]
-      : [],
-  };
+        ],
+      }
+    : {
+        purchase: purchaseCondition
+          ? {
+              type: safeString(purchaseCondition.values.TRIGGER ?? "ALWAYS"),
+              value: safeString(purchaseCondition.values.VALUE ?? ""),
+              invert: asBoolean(purchaseCondition.values.INVERT ?? false),
+            }
+          : null,
+        sell: sellCondition
+          ? {
+              type: safeString(sellCondition.values.TRIGGER ?? "ALWAYS"),
+              value: safeString(sellCondition.values.VALUE ?? ""),
+              invert: asBoolean(sellCondition.values.INVERT ?? false),
+            }
+          : null,
+        logic: logicGate
+          ? [
+              {
+                operator: safeString(logicGate.values.OPERATOR ?? "AND"),
+                negate: asBoolean(logicGate.values.NEGATE ?? false),
+              },
+            ]
+          : [],
+      };
 
   const restartOnWin = firstBlockByType(blocks, "restart_on_win");
   const restartOnLoss = firstBlockByType(blocks, "restart_on_loss");
+  const restartSettings = firstBlockByType(blocks, "restart_settings");
 
-  result.restart = {
-    onWin: restartOnWin
-      ? {
-          resetStake: asNumber(restartOnWin.values.RESET_STAKE ?? 10, 10),
-          enabled: asBoolean(restartOnWin.values.ENABLE ?? true),
-        }
-      : null,
-    onLoss: restartOnLoss
-      ? {
-          resetStake: asNumber(restartOnLoss.values.RESET_STAKE ?? 10, 10),
-          enabled: asBoolean(restartOnLoss.values.ENABLE ?? true),
-        }
-      : null,
-  };
+  result.restart = restartSettings
+    ? {
+        onWin: {
+          resetStake: asNumber(restartSettings.values.WIN_RESET_STAKE ?? 10, 10),
+          enabled: asBoolean(restartSettings.values.WIN_ENABLE ?? true),
+        },
+        onLoss: {
+          resetStake: asNumber(restartSettings.values.LOSS_RESET_STAKE ?? 10, 10),
+          enabled: asBoolean(restartSettings.values.LOSS_ENABLE ?? true),
+        },
+      }
+    : {
+        onWin: restartOnWin
+          ? {
+              resetStake: asNumber(restartOnWin.values.RESET_STAKE ?? 10, 10),
+              enabled: asBoolean(restartOnWin.values.ENABLE ?? true),
+            }
+          : null,
+        onLoss: restartOnLoss
+          ? {
+              resetStake: asNumber(restartOnLoss.values.RESET_STAKE ?? 10, 10),
+              enabled: asBoolean(restartOnLoss.values.ENABLE ?? true),
+            }
+          : null,
+      };
 
   const variables = blocks
     .filter((block) => block.type === "set_variable")
@@ -449,17 +534,32 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
       value: safeString(block.values.VAR_VALUE ?? ""),
       persistent: asBoolean(block.values.PERSIST ?? false),
     }));
+  const utilitySettings = firstBlockByType(blocks, "utility_settings");
 
-  result.utility = {
-    variables,
-    snapshot: firstBlockByType(blocks, "strategy_snapshot")
-      ? {
-          snapshotName: safeString(firstBlockByType(blocks, "strategy_snapshot")?.values.SNAPSHOT_NAME ?? "Strategy Snapshot"),
-          scope: safeString(firstBlockByType(blocks, "strategy_snapshot")?.values.SNAPSHOT_SCOPE ?? "full"),
-          includeMeta: asBoolean(firstBlockByType(blocks, "strategy_snapshot")?.values.INCLUDE_META ?? true),
-        }
-      : null,
-  };
+  result.utility = utilitySettings
+    ? {
+        variables: [
+          {
+            name: safeString(utilitySettings.values.VAR_NAME ?? ""),
+            value: safeString(utilitySettings.values.VAR_VALUE ?? ""),
+            persistent: asBoolean(utilitySettings.values.PERSIST ?? false),
+          },
+        ],
+        snapshot: {
+          scope: safeString(utilitySettings.values.SNAPSHOT_SCOPE ?? "full"),
+          includeMeta: asBoolean(utilitySettings.values.INCLUDE_META ?? true),
+        },
+      }
+    : {
+        variables,
+        snapshot: firstBlockByType(blocks, "strategy_snapshot")
+          ? {
+              // snapshotName: safeString(firstBlockByType(blocks, "strategy_snapshot")?.values.SNAPSHOT_NAME ?? "Strategy Snapshot"),
+              scope: safeString(firstBlockByType(blocks, "strategy_snapshot")?.values.SNAPSHOT_SCOPE ?? "full"),
+              includeMeta: asBoolean(firstBlockByType(blocks, "strategy_snapshot")?.values.INCLUDE_META ?? true),
+            }
+          : null,
+      };
 
   return result;
 }
@@ -469,35 +569,42 @@ function createApiPayload(strategy: StrategySnapshot): Record<string, unknown> |
 
   const market = strategy.market as Record<string, unknown>;
   const execution = strategy.execution as Record<string, unknown>;
+  const contractType = String(market.contractType ?? "UP").trim().toUpperCase();
   const payload: Record<string, unknown> = {
     request: "proposal",
     symbol: market.symbol ?? DEFAULT_SYMBOL,
-    contract_type: market.contractType ?? "UP",
+    contract_type: contractType,
     stake: execution.stake ?? 10,
     duration: execution.duration ?? 5,
     duration_unit: execution.durationUnit ?? "t",
   };
 
-  if (typeof market.barrier === "number") {
+  const hasBarrierContract = ["HIGH", "LOW", "KNOCK_IN", "KNOCK_OUT"].includes(contractType);
+  const hasDoubleBarrierContract = ["ENDS_BETWEEN", "ENDS_OUTSIDE", "STAYS_IN", "STAYS_OUT"].includes(contractType);
+  const hasDigitTargetContract = ["MATCHES", "DIFFERS", "OVER", "UNDER"].includes(contractType);
+  const hasDigitRangeContract = ["RANGE_IN", "RANGE_OUT"].includes(contractType);
+
+  if (hasBarrierContract && typeof market.barrier === "number") {
     payload.barrier = market.barrier;
   }
 
-  if (typeof market.barrierMode === "string" && market.barrierMode === "double") {
-    const barrierValue = typeof market.barrier === "number" ? market.barrier : 0;
-    payload.barrier_low = -Math.abs(barrierValue);
-    payload.barrier_high = Math.abs(barrierValue);
+  if (hasDoubleBarrierContract) {
+    const barrierValue = typeof market.barrier === "number" ? Math.abs(market.barrier) : 0;
+    payload.barrier_low = typeof market.barrierLow === "number" ? market.barrierLow : -Math.abs(barrierValue);
+    payload.barrier_high = typeof market.barrierHigh === "number" ? market.barrierHigh : Math.abs(barrierValue);
   }
 
-  if (typeof market.digitTarget === "number") {
+  if (hasDigitTargetContract && typeof market.digitTarget === "number") {
     payload.digit_target = market.digitTarget;
   }
 
-  if (typeof market.digitLow === "number") {
-    payload.digit_low = market.digitLow;
-  }
-
-  if (typeof market.digitHigh === "number") {
-    payload.digit_high = market.digitHigh;
+  if (hasDigitRangeContract) {
+    if (typeof market.digitLow === "number") {
+      payload.digit_low = market.digitLow;
+    }
+    if (typeof market.digitHigh === "number") {
+      payload.digit_high = market.digitHigh;
+    }
   }
 
   return payload;
@@ -532,9 +639,22 @@ class BotBuilderApp {
   private modalState: ModalState = { categoryId: null, templateType: null };
   private selectedCategoryId: string = DEFAULT_CATEGORY;
   private expandedCategoryIds: Set<string> = new Set([DEFAULT_CATEGORY]);
+  private selectedContractCategory: string = "PATH_INDEPENDENT";
+  private selectedContractType: string = "UP";
   private strategyXml: string | null = null;
   private lastSnapshot: StrategySnapshot | null = null;
   private readonly listeners: Array<() => void> = [];
+  private feedSymbols: Array<Record<string, unknown>> = [];
+  private feedAuthenticated = false;
+  private latestTick: Record<string, unknown> | null = null;
+  private subscribedSymbol: string | null = null;
+  private currentLifecycle: TradeLifecycleStage[] | null = null;
+  private currentLifecycleHeading = "";
+  private currentLifecycleSubheading = "";
+  private readonly wsEventLog: WsEventLogEntry[] = [];
+  private readonly contractTypesBySymbol: Map<string, ContractTypeRecord[]> = new Map();
+  private readonly pendingContractTypeSymbols: Set<string> = new Set();
+  private syncingContractMetadata = false;
 
   constructor(target: string | HTMLElement = "#app") {
     this.root = resolveTarget(target);
@@ -547,6 +667,7 @@ class BotBuilderApp {
     this.registerBlocks();
     this.initBlockly();
     this.bindUi();
+    this.bindTradingFeed();
     this.seedWorkspace(true);
     this.refreshAllPanels();
 
@@ -566,14 +687,13 @@ class BotBuilderApp {
             <label class="bb-market-picker">
               <span>Active market</span>
               <select id="bb-market-select">
-                <option value="VIX_100">Volatility 100 Index</option>
-                <option value="VIX_50">Volatility 50 Index</option>
-                <option value="VIX_25">Volatility 25 Index</option>
-                <option value="VIX_75">Volatility 75 Index</option>
+                <option value="__loading_symbols__">Waiting for symbols from server...</option>
               </select>
             </label>
           </div>
+          <div class="bb-topbar-status" id="bb-topbar-status">Click Connect to start.</div>
           <div class="bb-topbar-actions">
+            <button class="bb-btn bb-btn-primary" data-action="connect">Connect</button>
             <button class="bb-btn bb-btn-success" data-action="run">Run</button>
             <button class="bb-btn bb-btn-warn" data-action="export">Export</button>
             <button class="bb-btn bb-btn-primary" data-action="import-json">Import JSON</button>
@@ -598,11 +718,10 @@ class BotBuilderApp {
               <div id="bb-workspace" class="bb-workspace"></div>
             </div>
           </section>
-
-          <!--
           <aside class="bb-inspector">
             <section class="bb-card">
               <div class="bb-card-title">Status</div>
+              <div class="bb-status-pill is-error" id="bb-status-pill">Not ready</div>
               <div class="bb-status-caption" id="bb-status-caption">No validation issues yet.</div>
             </section>
 
@@ -620,13 +739,7 @@ class BotBuilderApp {
               <div class="bb-card-title">Results</div>
               <div id="bb-results" class="bb-results">Run the strategy to see validation output.</div>
             </section>
-
-            <section class="bb-card bb-tip-card">
-              <div class="bb-card-title">Tip</div>
-              <p>Start with Market and Execution, then add Conditions or Indicators if you need extra guards.</p>
-            </section>
           </aside>
-          -->
         </main>
 
         <div class="bb-modal" id="bb-modal" aria-hidden="true">
@@ -750,6 +863,10 @@ class BotBuilderApp {
     });
 
     this.workspace.addChangeListener(() => {
+      if (!this.syncingContractMetadata) {
+        this.syncMarketDropdowns();
+        this.syncExecutionHelperVisibility();
+      }
       this.refreshAllPanels();
     });
 
@@ -809,7 +926,8 @@ class BotBuilderApp {
       const action = target?.closest<HTMLElement>("[data-action]")?.dataset.action;
       if (!action) return;
 
-      if (action === "run") this.runStrategy();
+      if (action === "run") void this.runStrategy();
+      if (action === "connect") void this.connectFeed();
       if (action === "export") this.exportStrategy();
       if (action === "save") this.saveStrategy();
       if (action === "load") this.loadStrategy();
@@ -819,10 +937,28 @@ class BotBuilderApp {
 
     marketSelect?.addEventListener("change", () => {
       if (!this.workspace) return;
-      const marketBlock = this.findBlockByType("market_symbol");
-      if (marketBlock) {
-        marketBlock.setFieldValue(marketSelect.value, "SYMBOL");
+      if (marketSelect.value.startsWith("__loading")) return;
+      const marketSettingsBlock = this.findBlockByType("market_settings");
+      const marketSymbolBlock = this.findBlockByType("market_symbol");
+      if (marketSettingsBlock) {
+        marketSettingsBlock.setFieldValue(marketSelect.value, "SYMBOL");
       }
+      if (marketSymbolBlock) {
+        marketSymbolBlock.setFieldValue(marketSelect.value, "SYMBOL");
+      }
+      const nextSymbol = marketSelect.value.trim() || DEFAULT_SYMBOL;
+      if (wsService.isConnected()) {
+        if (this.subscribedSymbol && this.subscribedSymbol !== nextSymbol) {
+          wsService.unsubscribe(this.subscribedSymbol);
+        }
+        if (this.subscribedSymbol !== nextSymbol) {
+          wsService.subscribe(nextSymbol);
+          this.subscribedSymbol = nextSymbol;
+        }
+      }
+      void this.requestContractTypesForSymbol(nextSymbol);
+      this.syncMarketDropdowns();
+      this.updateFeedStatus(`Selected ${marketSelect.value}`);
       this.refreshAllPanels();
     });
 
@@ -846,6 +982,1137 @@ class BotBuilderApp {
         console.error("Drop parse error:", error);
       }
     });
+  }
+
+  private bindTradingFeed(): void {
+    const handleConnected = () => {
+      this.appendWsEventLog("connected", { status: "connected" });
+      this.refreshConnectionStatus();
+    };
+    const handleDisconnected = (info?: { code?: number; reason?: string; wasClean?: boolean }) => {
+      this.feedAuthenticated = false;
+      this.subscribedSymbol = null;
+      this.pendingContractTypeSymbols.clear();
+      this.appendWsEventLog("disconnected", info ?? { status: "disconnected" });
+      const reason = info?.reason?.trim();
+      const code = info?.code != null ? ` (${info.code})` : "";
+      if (reason) {
+        this.updateFeedStatus(`Connection closed${code}: ${reason}`);
+      } else {
+        this.updateFeedStatus(`Connection closed${code}`.trim());
+      }
+      this.refreshConnectionStatus();
+    };
+    const handleAuthenticated = (data: { user_id?: number; is_demo?: boolean }) => {
+      this.feedAuthenticated = true;
+      const accountType = data.is_demo ? "Demo" : "Real";
+      this.appendWsEventLog("authenticated", data);
+      this.refreshConnectionStatus();
+      this.updateFeedStatus(`Authenticated as ${accountType} user ${data.user_id ?? ""}`.trim());
+      wsService.requestSymbols();
+    };
+    const handleSymbols = (symbols: Array<Record<string, unknown>>) => {
+      this.feedSymbols = Array.isArray(symbols) ? symbols.filter(Boolean) : [];
+      this.appendWsEventLog("symbols", symbols);
+      this.renderSymbolOptions(this.feedSymbols);
+      this.syncSymbolDropdowns();
+      this.updateFeedStatus(`Loaded ${this.feedSymbols.length} symbols`);
+      const selectedSymbol = this.getSelectedMarketSymbol();
+      if (selectedSymbol) {
+        void this.requestContractTypesForSymbol(selectedSymbol);
+      }
+    };
+    const handleContractTypes = (payload: Record<string, unknown>) => {
+      this.appendWsEventLog("contract_types", payload);
+      this.handleContractTypesPayload(payload);
+    };
+    const handleTick = (tick: Record<string, unknown>) => {
+      this.latestTick = tick;
+      this.appendWsEventLog("tick", tick);
+    };
+    const handleOrder = (message: Record<string, unknown>) => {
+      this.appendWsEventLog("order", message);
+      this.applyLifecycleEvent("order", message);
+    };
+    const handleContractActivated = (message: Record<string, unknown>) => {
+      this.appendWsEventLog("contract_activated", message);
+      this.applyLifecycleEvent("activated", message);
+    };
+    const handleContractSettled = (message: Record<string, unknown>) => {
+      this.appendWsEventLog("contract_settled", message);
+      this.applyLifecycleEvent("expiry", message);
+    };
+    const handleError = (error: unknown) => {
+      const message = error instanceof Error ? error.message : typeof error === "string" ? error : "WebSocket error";
+      this.appendWsEventLog("error", { message });
+      this.refreshConnectionStatus();
+    };
+
+    wsService.on("connected", handleConnected);
+    wsService.on("disconnected", handleDisconnected);
+    wsService.on("authenticated", handleAuthenticated);
+    wsService.on("symbols", handleSymbols);
+    wsService.on("contract_types", handleContractTypes);
+    wsService.on("tick", handleTick);
+    wsService.on("order", handleOrder);
+    wsService.on("contract_activated", handleContractActivated);
+    wsService.on("contract_settled", handleContractSettled);
+    wsService.on("error", handleError);
+
+    this.listeners.push(() => wsService.off("connected", handleConnected));
+    this.listeners.push(() => wsService.off("disconnected", handleDisconnected));
+    this.listeners.push(() => wsService.off("authenticated", handleAuthenticated));
+    this.listeners.push(() => wsService.off("symbols", handleSymbols));
+    this.listeners.push(() => wsService.off("contract_types", handleContractTypes));
+    this.listeners.push(() => wsService.off("tick", handleTick));
+    this.listeners.push(() => wsService.off("order", handleOrder));
+    this.listeners.push(() => wsService.off("contract_activated", handleContractActivated));
+    this.listeners.push(() => wsService.off("contract_settled", handleContractSettled));
+    this.listeners.push(() => wsService.off("error", handleError));
+  }
+
+  private async connectFeed(): Promise<void> {
+    try {
+      this.updateFeedStatus("Connecting to the demo server...");
+      const token = await this.resolveAuthToken();
+      if (wsService.isAuthenticated()) {
+        wsService.requestSymbols();
+        this.refreshConnectionStatus();
+        this.updateFeedStatus("Already authenticated. Loading live symbols...");
+        return;
+      }
+      await this.authenticateWithToken(token);
+      this.refreshConnectionStatus();
+      this.updateFeedStatus("Authenticated and ready to load live symbols.");
+    } catch (error) {
+      const message = this.extractErrorMessage(error, "Unable to start feed connection");
+      this.updateFeedStatus(message);
+      this.appendWsEventLog("auth_bootstrap_failed", { message });
+    }
+  }
+
+  private getRuntimeWindow(): BotBuilderWindow {
+    return window as BotBuilderWindow;
+  }
+
+  private getStoredAuthToken(): string {
+    return window.localStorage.getItem(AUTH_STORAGE_KEY)?.trim() ?? "";
+  }
+
+  private getInjectedAuthToken(): string {
+    const runtimeWindow = this.getRuntimeWindow();
+    const windowToken = runtimeWindow.__BOT_BUILDER_AUTH_TOKEN__?.trim() ?? "";
+    const metaToken = document.querySelector<HTMLMetaElement>('meta[name="bot-builder-auth-token"]')?.content?.trim() ?? "";
+    const token = windowToken || metaToken;
+
+    if (token) {
+      window.localStorage.setItem(AUTH_STORAGE_KEY, token);
+    }
+
+    return token;
+  }
+
+  private getAuthBootstrapConfig(): BotBuilderAuthConfig | null {
+    const runtimeWindow = this.getRuntimeWindow();
+    const injected = runtimeWindow.__BOT_BUILDER_AUTH__ ?? {};
+    const token = injected.token?.trim() ?? "";
+    const identifier = injected.identifier?.trim() ?? "";
+    const password = injected.password?.trim() ?? "";
+    const deviceId = injected.deviceId?.trim() || "chart-main";
+    const geoLocation = injected.geoLocation?.trim() || "Nairobi, Kenya";
+    const appVersion = injected.appVersion?.trim() || "0.1.6";
+
+    if (!token && (!identifier || !password)) {
+      return null;
+    }
+
+    return {
+      token,
+      identifier,
+      password,
+      deviceId,
+      geoLocation,
+      appVersion,
+    };
+  }
+
+  private storeAuthToken(token: string): void {
+    const nextToken = token.trim();
+    if (!nextToken) return;
+    window.localStorage.setItem(AUTH_STORAGE_KEY, nextToken);
+    this.getRuntimeWindow().__BOT_BUILDER_AUTH_TOKEN__ = nextToken;
+  }
+
+  private async bootstrapAuthToken(): Promise<string> {
+    const config = this.getAuthBootstrapConfig();
+    if (!config) {
+      throw new Error("Paste a demo JWT token before running the bot, or configure demo auth credentials in .env.local.");
+    }
+
+    if (config.token) {
+      this.storeAuthToken(config.token);
+      return config.token;
+    }
+
+    if (!config.identifier || !config.password) {
+      throw new Error("Demo auth credentials are incomplete.");
+    }
+
+    const submitResponse = await fetch(`${AUTH_API_BASE}/auth/submit-identifier`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identifier: config.identifier,
+        device_id: config.deviceId,
+        geo_location: config.geoLocation,
+        device_metadata: {
+          os: "Linux",
+          browser: "Chrome",
+          app_version: config.appVersion,
+        },
+      }),
+    });
+
+    const submitJson = (await submitResponse.json().catch(() => null)) as Record<string, any> | null;
+    const tempToken = String(submitJson?.data?.token ?? "").trim();
+    if (!submitResponse.ok || !tempToken) {
+      throw new Error(submitJson?.message ? String(submitJson.message) : "Failed to submit demo identifier.");
+    }
+
+    const loginResponse = await fetch(`${AUTH_API_BASE}/auth/login-password`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${tempToken}`,
+      },
+      body: JSON.stringify({ password: config.password }),
+    });
+
+    const loginJson = (await loginResponse.json().catch(() => null)) as Record<string, any> | null;
+    const freshToken = String(loginJson?.data?.token ?? "").trim();
+    if (!loginResponse.ok || !freshToken) {
+      throw new Error(loginJson?.message ? String(loginJson.message) : "Failed to login demo account.");
+    }
+
+    this.storeAuthToken(freshToken);
+    return freshToken;
+  }
+
+  private async authenticateWithToken(token: string): Promise<void> {
+    const normalized = token.trim();
+    if (!normalized) {
+      throw new Error("No demo JWT token available.");
+    }
+
+    const authWait = this.waitForWsEvent<{ user_id?: number; is_demo?: boolean }>("authenticated");
+    if (wsService.isConnected()) {
+      wsService.authenticate(normalized);
+    } else {
+      wsService.connect(normalized);
+    }
+
+    await authWait;
+    this.storeAuthToken(normalized);
+  }
+
+  private isAuthFailure(error: unknown): boolean {
+    const message = this.extractErrorMessage(error, "").toLowerCase();
+    return (
+      message.includes("unauthorized") ||
+      message.includes("connection closed") ||
+      message.includes("failed while waiting for authenticated") ||
+      message.includes("paste a demo jwt token") ||
+      message.includes("auth")
+    );
+  }
+
+  private async resolveAuthToken(): Promise<string> {
+    const storedToken = this.getStoredAuthToken();
+    if (storedToken) {
+      return storedToken;
+    }
+
+    const injectedToken = this.getInjectedAuthToken();
+    if (injectedToken) {
+      return injectedToken;
+    }
+
+    return this.bootstrapAuthToken();
+  }
+
+  private updateFeedStatus(message: string): void {
+    const status = this.root.querySelector<HTMLElement>("#bb-topbar-status");
+    if (status) status.textContent = message;
+  }
+
+  private refreshConnectionStatus(): void {
+    const status = this.root.querySelector<HTMLElement>("#bb-topbar-status");
+    if (!status) return;
+
+    const connectionState = wsService.getStatus();
+    const isAuthenticated = this.feedAuthenticated || wsService.isAuthenticated();
+    const label = !wsService.isConnected()
+      ? "Disconnected"
+      : connectionState === "connecting"
+        ? "Connecting"
+        : isAuthenticated
+          ? "Authenticated"
+          : "Connected";
+
+    status.textContent = label;
+  }
+
+  private appendWsEventLog(event: string, payload: unknown): void {
+    this.wsEventLog.push({
+      at: Date.now(),
+      event,
+      payload,
+    });
+    if (this.wsEventLog.length > 40) {
+      this.wsEventLog.splice(0, this.wsEventLog.length - 40);
+    }
+    if (this.currentLifecycle) {
+      this.renderTradeLifecycle(this.currentLifecycle, this.currentLifecycleHeading || "Live trade", this.currentLifecycleSubheading || "Live websocket activity");
+    }
+  }
+
+  private extractErrorMessage(error: unknown, fallback: string): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    if (error && typeof error === "object") {
+      const record = error as Record<string, unknown>;
+      const message = record.message;
+      if (typeof message === "string" && message.trim()) return message;
+      const details = record.error;
+      if (typeof details === "string" && details.trim()) return details;
+      return this.stringifyPayload(error);
+    }
+    return fallback;
+  }
+
+  private normalizeRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+  }
+
+  private toFiniteNumber(value: unknown): number | null {
+    const number = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  private toTradeId(value: unknown): string | number | null {
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    }
+    return null;
+  }
+
+  private getTickPrice(source: Record<string, unknown> | null): number | null {
+    if (!source) return null;
+    return this.toFiniteNumber(source.price ?? source.quote ?? source.value ?? source.close ?? source.tick_price);
+  }
+
+  private getTickTime(source: Record<string, unknown> | null): number {
+    if (!source) return Date.now();
+    const epochMs = this.toFiniteNumber(source.epoch_ms ?? source.timestamp_ms ?? source.time_ms);
+    if (epochMs !== null) return epochMs;
+    const epoch = this.toFiniteNumber(source.epoch ?? source.timestamp ?? source.time);
+    if (epoch !== null) return epoch < 10_000_000_000 ? epoch * 1000 : epoch;
+    return Date.now();
+  }
+
+  private stringifyPayload(value: unknown): string {
+    if (value == null) return "No payload available.";
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+
+  private durationToMs(duration: number, durationUnit: string): number {
+    const value = Math.max(1, Math.floor(Number(duration) || 1));
+    const unit = String(durationUnit || "s").trim().toLowerCase();
+    if (unit === "t" || unit === "tick" || unit === "ticks" || unit === "s" || unit === "sec" || unit === "second" || unit === "seconds") {
+      return value * 1_000;
+    }
+    if (unit === "m" || unit === "min" || unit === "minute" || unit === "minutes") return value * 60_000;
+    if (unit === "h" || unit === "hour" || unit === "hours") return value * 3_600_000;
+    return value * 1_000;
+  }
+
+  private formatTime(epochMs: number): string {
+    return new Date(epochMs).toLocaleString(undefined, {
+      hour12: false,
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  private buildTradeLifecycle(payload: Record<string, unknown>, orderData: Record<string, unknown>): TradeLifecycleStage[] {
+    const contractId = this.toTradeId(orderData.contract_id ?? orderData.contractId ?? payload.contract_id ?? payload.contractId);
+    const isProvisional = contractId == null;
+    const duration = this.toFiniteNumber(orderData.duration ?? payload.duration) ?? 5;
+    const durationUnit = String(orderData.duration_unit ?? payload.duration_unit ?? "t");
+    const orderTime = this.getTickTime(
+      this.normalizeRecord(orderData) ?? this.normalizeRecord(payload) ?? this.latestTick,
+    );
+    const orderPrice = this.toFiniteNumber(orderData.entry_price ?? orderData.price ?? payload.entry_price ?? payload.price) ?? this.getTickPrice(this.latestTick);
+    const activationTime = this.getTickTime(
+      this.normalizeRecord({
+        epoch_ms: orderData.activation_time_epoch ?? orderData.entry_time_epoch ?? payload.activation_time_epoch ?? payload.entry_time_epoch,
+      }),
+    );
+    const activationPrice = this.toFiniteNumber(orderData.activation_price ?? orderData.entry_price ?? payload.activation_price ?? payload.entry_price ?? orderPrice);
+    const expiryTime = this.getTickTime(
+      this.normalizeRecord({
+        epoch_ms: orderData.expiry_time_epoch ?? payload.expiry_time_epoch ?? (activationTime + this.durationToMs(duration, durationUnit)),
+      }),
+    );
+
+    return [
+      {
+        key: "order",
+        title: "Order",
+        status: isProvisional ? "active" : "done",
+        timeMs: orderTime,
+        price: orderPrice,
+        contractId,
+        note: isProvisional
+          ? "Order request sent. Waiting for the websocket contract lifecycle."
+          : "Order confirmed by the websocket feed.",
+        rawPayload: orderData,
+      },
+      {
+        key: "activated",
+        title: "Activated",
+        status: isProvisional ? "pending" : "active",
+        timeMs: activationTime,
+        price: activationPrice,
+        contractId,
+        note: isProvisional ? "Waiting for contract activation from the websocket feed." : "Trade is active on the demo feed.",
+        rawPayload: {
+          type: "contract_activated",
+          contract_id: contractId,
+          activation_price: activationPrice,
+          activation_time_epoch: activationTime,
+          expiry_time_epoch: expiryTime,
+        },
+      },
+      {
+        key: "expiry",
+        title: "Expiry",
+        status: "pending",
+        timeMs: expiryTime,
+        price: this.toFiniteNumber(orderData.exit_price ?? payload.exit_price ?? activationPrice),
+        contractId,
+        note: isProvisional ? "Waiting for expiry and settlement events." : "Trade will settle when the duration elapses.",
+        rawPayload: {
+          type: "contract_settled",
+          contract_id: contractId,
+          settled_time_epoch: expiryTime,
+          exit_price: this.toFiniteNumber(orderData.exit_price ?? payload.exit_price ?? activationPrice),
+        },
+      },
+    ];
+  }
+
+  private setCurrentLifecycle(stages: TradeLifecycleStage[], heading: string, subheading: string): void {
+    this.currentLifecycle = stages.map((stage) => ({ ...stage }));
+    this.currentLifecycleHeading = heading;
+    this.currentLifecycleSubheading = subheading;
+    this.renderTradeLifecycle(this.currentLifecycle, heading, subheading);
+  }
+
+  private findLifecycleStageIndex(key: TradeLifecycleStageKey): number {
+    return this.currentLifecycle?.findIndex((stage) => stage.key === key) ?? -1;
+  }
+
+  private applyLifecycleEvent(stageKey: TradeLifecycleStageKey, message: Record<string, unknown>): void {
+    if (!this.currentLifecycle) return;
+
+    const contractId = this.toTradeId(message.contract_id ?? message.contractId);
+    const currentContractId = this.toTradeId(this.currentLifecycle[0]?.contractId ?? this.currentLifecycle[1]?.contractId ?? this.currentLifecycle[2]?.contractId);
+    if (contractId !== null && currentContractId !== null && String(contractId) !== String(currentContractId)) {
+      return;
+    }
+
+    const nextStages = this.currentLifecycle.map((stage) => ({ ...stage }));
+    const stageIndex = this.findLifecycleStageIndex(stageKey);
+    if (stageIndex === -1) return;
+
+    const eventTime = this.getTickTime(
+      this.normalizeRecord({
+        epoch_ms:
+          message.activation_time_epoch ??
+          message.settled_time_epoch ??
+          message.entry_time_epoch ??
+          message.expiry_time_epoch ??
+          message.epoch_ms,
+      }),
+    );
+    const eventPrice = this.toFiniteNumber(
+      message.activation_price ??
+        message.exit_price ??
+        message.entry_price ??
+        message.price ??
+        this.getTickPrice(this.latestTick),
+    );
+
+    const target = nextStages[stageIndex];
+    target.timeMs = eventTime;
+    target.price = eventPrice ?? target.price ?? null;
+    target.contractId = contractId ?? target.contractId;
+    target.rawPayload = message;
+
+    if (stageKey === "order") {
+      target.status = "done";
+      target.note = "Order confirmed by the websocket feed.";
+      this.currentLifecycle = nextStages;
+      this.renderTradeLifecycle(nextStages, this.currentLifecycleHeading || "Demo trade placed successfully", this.currentLifecycleSubheading || "Waiting for live websocket lifecycle events.");
+      this.updateFeedStatus(`Order confirmed${contractId !== null ? ` for contract ${String(contractId)}` : ""}.`);
+      return;
+    }
+
+    if (stageKey === "activated") {
+      target.status = "done";
+      target.note = "Trade activation confirmed by the websocket feed.";
+      const expiryIndex = this.findLifecycleStageIndex("expiry");
+      if (expiryIndex !== -1) {
+        const expiryStage = nextStages[expiryIndex];
+        if (message.expiry_time_epoch != null) {
+          expiryStage.timeMs = this.getTickTime(this.normalizeRecord({ epoch_ms: message.expiry_time_epoch }));
+        }
+        expiryStage.contractId = contractId ?? expiryStage.contractId;
+        expiryStage.status = "pending";
+        expiryStage.rawPayload = message;
+      }
+      this.currentLifecycle = nextStages;
+      this.renderTradeLifecycle(nextStages, this.currentLifecycleHeading || "Demo trade placed successfully", "The trade is now running through order, activation, and expiry.");
+      this.updateFeedStatus(`Trade activated${contractId !== null ? ` for contract ${String(contractId)}` : ""}.`);
+      return;
+    }
+
+    if (stageKey === "expiry") {
+      target.status = "done";
+      target.note = "Trade expired and settled from the websocket feed.";
+      const activationIndex = this.findLifecycleStageIndex("activated");
+      if (activationIndex !== -1) {
+        nextStages[activationIndex].status = "done";
+        nextStages[activationIndex].rawPayload = message;
+      }
+      this.currentLifecycle = nextStages;
+      this.renderTradeLifecycle(nextStages, "Demo trade settled", "The server confirmed the contract expiry and settlement.");
+      this.updateFeedStatus(`Trade settled${contractId !== null ? ` for contract ${String(contractId)}` : ""}.`);
+    }
+  }
+
+  private renderTradeLifecycle(stages: TradeLifecycleStage[], heading: string, subheading: string): void {
+    const resultsEl = this.root.querySelector<HTMLElement>("#bb-results");
+    if (!resultsEl) return;
+
+    const rows = stages
+      .map((stage) => {
+        const badgeClass = stage.status === "done" ? "is-ready" : stage.status === "active" ? "is-running" : "is-pending";
+        const priceText = stage.price == null ? "n/a" : String(stage.price);
+        const contractText = stage.contractId == null ? "n/a" : String(stage.contractId);
+        return `
+          <div class="bb-lifecycle-row">
+            <div class="bb-lifecycle-badge ${badgeClass}">${escapeHtml(stage.title)}</div>
+            <div class="bb-lifecycle-body">
+              <div class="bb-lifecycle-title">${escapeHtml(stage.note)}</div>
+              <div class="bb-result-meta">
+                <div><strong>Time</strong><span>${escapeHtml(this.formatTime(stage.timeMs))}</span></div>
+                <div><strong>Price</strong><span>${escapeHtml(priceText)}</span></div>
+                <div><strong>Contract</strong><span>${escapeHtml(contractText)}</span></div>
+              </div>
+              <details class="bb-lifecycle-details">
+                <summary>Raw websocket payload</summary>
+                <pre class="bb-lifecycle-raw">${escapeHtml(this.stringifyPayload(stage.rawPayload))}</pre>
+              </details>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    const logRows = this.wsEventLog
+      .slice()
+      .reverse()
+      .map((entry) => {
+        const timestamp = new Date(entry.at).toLocaleTimeString([], { hour12: false });
+        return `
+          <div class="bb-event-log-row">
+            <span class="bb-event-log-time">${escapeHtml(timestamp)}</span>
+            <span class="bb-event-log-name">${escapeHtml(entry.event)}</span>
+            <pre class="bb-event-log-payload">${escapeHtml(this.stringifyPayload(entry.payload))}</pre>
+          </div>
+        `;
+      })
+      .join("");
+
+    resultsEl.innerHTML = `
+      <div class="bb-result-ok">${escapeHtml(heading)}</div>
+      <div class="bb-result-caption">${escapeHtml(subheading)}</div>
+      <div class="bb-lifecycle-list">${rows}</div>
+      <div class="bb-event-log">
+        <div class="bb-event-log-title">Live Event Log</div>
+        <div class="bb-event-log-list">${logRows || `<div class="bb-event-log-empty">Waiting for websocket events...</div>`}</div>
+      </div>
+    `;
+  }
+
+  private renderSymbolOptions(symbols: Array<Record<string, unknown>>): void {
+    const select = this.root.querySelector<HTMLSelectElement>("#bb-market-select");
+    if (!select) return;
+
+    const currentValue = select.value.trim();
+    const normalized = symbols
+      .map((item) => {
+        const value = safeString(item.name ?? item.symbol ?? "");
+        if (!value) return null;
+        const label = safeString(item.display_name ?? item.name ?? item.symbol ?? value) || value;
+        return { value, label };
+      })
+      .filter((item): item is { value: string; label: string } => Boolean(item));
+
+    const options = normalized.length
+      ? normalized
+      : [{ value: "__loading_symbols__", label: "Waiting for symbols from server..." }];
+
+    select.innerHTML = options
+      .map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`)
+      .join("");
+
+    const nextValue = options.some((option) => option.value === currentValue) ? currentValue : options[0]?.value ?? "__loading_symbols__";
+    select.value = nextValue;
+
+    const marketBlock = this.findBlockByType("market_symbol");
+    if (marketBlock) {
+      marketBlock.setFieldValue(nextValue, "SYMBOL");
+    }
+
+    const activeSymbol = this.getSelectedMarketSymbol();
+    if (activeSymbol && !activeSymbol.startsWith("__loading")) {
+      void this.requestContractTypesForSymbol(activeSymbol);
+    }
+    this.syncMarketDropdowns();
+  }
+
+  private getSelectedMarketSymbol(): string {
+    const marketSettingsBlock = this.findBlockByType("market_settings");
+    const marketSymbolBlock = this.findBlockByType("market_symbol");
+    return (
+      getBlockFieldValue(marketSettingsBlock, "SYMBOL") ||
+      getBlockFieldValue(marketSymbolBlock, "SYMBOL") ||
+      this.root.querySelector<HTMLSelectElement>("#bb-market-select")?.value.trim() ||
+      DEFAULT_SYMBOL
+    );
+  }
+
+  private getSelectedContractType(): string {
+    const marketSettingsBlock = this.findBlockByType("market_settings");
+    const marketContractBlock = this.findBlockByType("market_contract");
+    return (
+      getBlockFieldValue(marketSettingsBlock, "CONTRACT_TYPE") ||
+      getBlockFieldValue(marketContractBlock, "CONTRACT_TYPE") ||
+      "UP"
+    ).trim().toUpperCase() || "UP";
+  }
+
+  private getSelectedContractCategory(): string {
+    const marketSettingsBlock = this.findBlockByType("market_settings");
+    const marketCategoryBlock = this.findBlockByType("market_category");
+    return (
+      getBlockFieldValue(marketSettingsBlock, "CONTRACT_CATEGORY") ||
+      getBlockFieldValue(marketCategoryBlock, "CONTRACT_CATEGORY") ||
+      this.selectedContractCategory ||
+      "PATH_INDEPENDENT"
+    );
+  }
+
+  private getSelectedContractTypeRecord(): ContractTypeRecord | null {
+    const symbol = this.getSelectedMarketSymbol();
+    const records = this.contractTypesBySymbol.get(symbol) ?? [];
+    const selectedType = this.getSelectedContractType();
+    return records.find((record) => record.contract_type === selectedType) ?? null;
+  }
+
+  private shouldShowBarrierControls(contractType: string, record: ContractTypeRecord | null): boolean {
+    const normalized = contractType.trim().toUpperCase();
+    if (record?.barrier_category) {
+      return record.barrier_category !== "none";
+    }
+    return ["HIGH", "LOW", "KNOCK_IN", "KNOCK_OUT", "ENDS_BETWEEN", "ENDS_OUTSIDE", "STAYS_IN", "STAYS_OUT"].includes(normalized);
+  }
+
+  private shouldShowDigitControls(contractType: string, record: ContractTypeRecord | null): boolean {
+    const normalized = contractType.trim().toUpperCase();
+    if (record?.contract_category) {
+      return record.contract_category === "DIGITS";
+    }
+    return ["MATCHES", "DIFFERS", "EVEN", "ODD", "OVER", "UNDER", "PRIME", "NON_PRIME", "RANGE_IN", "RANGE_OUT"].includes(normalized);
+  }
+
+  private shouldShowDigitRangeControls(contractType: string, record: ContractTypeRecord | null): boolean {
+    const normalized = contractType.trim().toUpperCase();
+    if (record?.contract_category) {
+      return record.contract_category === "DIGITS" && ["RANGE_IN", "RANGE_OUT"].includes(normalized);
+    }
+    return ["RANGE_IN", "RANGE_OUT"].includes(normalized);
+  }
+
+  private getBarrierModeForContract(contractType: string, record: ContractTypeRecord | null): "single" | "double" | "disabled" {
+    const barrierCategory = safeString(record?.barrier_category ?? "").trim().toLowerCase();
+    if (barrierCategory === "single" || barrierCategory === "double" || barrierCategory === "disabled") {
+      return barrierCategory;
+    }
+
+    const normalized = contractType.trim().toUpperCase();
+    if (["ENDS_BETWEEN", "ENDS_OUTSIDE", "STAYS_IN", "STAYS_OUT"].includes(normalized)) {
+      return "double";
+    }
+    if (["HIGH", "LOW", "KNOCK_IN", "KNOCK_OUT"].includes(normalized)) {
+      return "single";
+    }
+    return "disabled";
+  }
+
+  private setBlockVisibility(block: any, visible: boolean): boolean {
+    if (!block || typeof block.setVisible !== "function") return false;
+    const currentVisible = typeof block.isVisible === "function" ? block.isVisible() : undefined;
+    if (currentVisible === visible) return false;
+    block.setVisible(visible);
+    return true;
+  }
+
+  private syncExecutionHelperVisibility(): void {
+    if (!this.workspace || this.syncingContractMetadata) return;
+
+    this.syncingContractMetadata = true;
+    try {
+      const record = this.getSelectedContractTypeRecord();
+      const contractType = this.getSelectedContractType();
+      const barrierBlock = this.findBlockByType("market_barrier");
+      const digitTargetBlock = this.findBlockByType("market_digits");
+      const digitRangeBlock = this.findBlockByType("market_range");
+
+      if (barrierBlock) {
+        const desiredMode = this.getBarrierModeForContract(contractType, record);
+        const currentMode = safeString(barrierBlock.getFieldValue("BARRIER_MODE") ?? "");
+        if (currentMode !== desiredMode) {
+          barrierBlock.setFieldValue(desiredMode, "BARRIER_MODE");
+        }
+      }
+
+      const showBarrier = this.shouldShowBarrierControls(contractType, record);
+      const showDigits = this.shouldShowDigitControls(contractType, record);
+      const showDigitRange = this.shouldShowDigitRangeControls(contractType, record);
+
+      const changed =
+        this.setBlockVisibility(barrierBlock, showBarrier) ||
+        this.setBlockVisibility(digitTargetBlock, showDigits) ||
+        this.setBlockVisibility(digitRangeBlock, showDigitRange);
+
+      if (changed) {
+        this.placeSectionBlocks("execution");
+        try {
+          this.workspace.render();
+          this.workspace.resize();
+        } catch (error) {
+          console.error("Execution helper visibility sync failed:", error);
+        }
+      }
+    } finally {
+      this.syncingContractMetadata = false;
+    }
+  }
+
+  private normalizeContractTypeRecord(value: unknown): ContractTypeRecord | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    const contractType = safeString(record.contract_type ?? "");
+    const contractCategory = safeString(record.contract_category ?? "");
+    if (!contractType || !contractCategory) return null;
+    return {
+      contract_type: contractType,
+      contract_display: safeString(record.contract_display ?? contractType) || contractType,
+      contract_category: contractCategory,
+      contract_category_display: safeString(record.contract_category_display ?? contractCategory) || contractCategory,
+      barrier_category: safeString(record.barrier_category ?? ""),
+      barriers: typeof record.barriers === "number" ? record.barriers : undefined,
+      description: safeString(record.description ?? ""),
+    };
+  }
+
+  private normalizeContractTypesPayload(payload: Record<string, unknown>): { symbol: string; contractTypes: ContractTypeRecord[] } | null {
+    const symbol = safeString(payload.symbol ?? payload.underlying_symbol ?? "");
+    const source = payload.contract_types ?? payload.data ?? payload.message;
+    let list: unknown[] = [];
+    if (Array.isArray(source)) {
+      list = source;
+    } else if (source && typeof source === "object" && !Array.isArray(source)) {
+      const nested = (source as Record<string, unknown>).contract_types;
+      if (Array.isArray(nested)) {
+        list = nested;
+      }
+    }
+    const contractTypes = list
+      .map((item: unknown) => this.normalizeContractTypeRecord(item))
+      .filter((item): item is ContractTypeRecord => Boolean(item));
+    if (!symbol) return null;
+    return { symbol, contractTypes };
+  }
+
+  private handleContractTypesPayload(payload: Record<string, unknown>): void {
+    const normalized = this.normalizeContractTypesPayload(payload);
+    if (!normalized) return;
+
+    this.contractTypesBySymbol.set(normalized.symbol, normalized.contractTypes);
+    this.pendingContractTypeSymbols.delete(normalized.symbol);
+    this.syncExecutionHelperVisibility();
+    if (normalized.symbol === this.getSelectedMarketSymbol()) {
+      this.syncMarketDropdowns();
+    }
+  }
+
+  private requestContractTypesForSymbol(symbol: string): void {
+    const nextSymbol = symbol.trim() || DEFAULT_SYMBOL;
+    if (nextSymbol.startsWith("__loading")) return;
+    if (this.pendingContractTypeSymbols.has(nextSymbol)) return;
+    if (wsService.requestContractTypes(nextSymbol)) {
+      this.pendingContractTypeSymbols.add(nextSymbol);
+    }
+  }
+
+  private updateDropdownFieldOptions(
+    block: any,
+    fieldName: string,
+    options: Array<{ label: string; value: string }>,
+    preferredValue?: string | null,
+    preferredLabel?: string | null,
+  ): string | null {
+    if (!block || !Array.isArray(options)) return null;
+
+    const field = block.getField?.(fieldName);
+    if (!field) return null;
+
+    const optionMap = new Map<string, string>();
+    const pushOption = (label: string, value: string): void => {
+      const nextLabel = label.trim();
+      const nextValue = value.trim();
+      if (!nextLabel || !nextValue || optionMap.has(nextValue)) return;
+      optionMap.set(nextValue, nextLabel);
+    };
+
+    if (preferredValue) {
+      pushOption(preferredLabel ?? preferredValue, preferredValue);
+    }
+
+    const currentValue = safeString(block.getFieldValue(fieldName));
+    if (currentValue && currentValue !== preferredValue) {
+      pushOption(currentValue, currentValue);
+    }
+
+    for (const option of options) {
+      pushOption(option.label, option.value);
+    }
+
+    const fieldAny = field as any;
+    const normalizedOptions = Array.from(optionMap.entries()).map(([value, label]) => [label, value] as [string, string]);
+    if (normalizedOptions.length === 0) return null;
+
+    fieldAny.menuGenerator_ = normalizedOptions;
+    fieldAny.generatedOptions = null;
+
+    const validValues = new Set(normalizedOptions.map((option) => option[1]));
+    const nextValue = preferredValue && validValues.has(preferredValue)
+      ? preferredValue
+      : validValues.has(currentValue)
+        ? currentValue
+        : normalizedOptions[0][1];
+
+    if (nextValue !== currentValue) {
+      block.setFieldValue(nextValue, fieldName);
+    }
+
+    return nextValue;
+  }
+
+  private syncMarketDropdowns(): void {
+    if (!this.workspace || this.syncingContractMetadata) return;
+
+    this.syncingContractMetadata = true;
+    try {
+      const symbol = this.getSelectedMarketSymbol();
+      const records = this.contractTypesBySymbol.get(symbol) ?? [];
+      if (records.length === 0 && wsService.isConnected()) {
+        this.requestContractTypesForSymbol(symbol);
+      }
+      const marketSettingsBlock = this.findBlockByType("market_settings");
+      const categoryBlock = this.findBlockByType("market_category");
+      const contractBlock = this.findBlockByType("market_contract");
+      const currentCategory = this.getSelectedContractCategory();
+      const currentContract = this.getSelectedContractType();
+
+      const categoryOptions = records.length
+        ? Array.from(
+            new Map(
+              records.map((record) => [
+                record.contract_category,
+                {
+                  label: record.contract_category_display || record.contract_category,
+                  value: record.contract_category,
+                },
+              ]),
+            ).values(),
+          )
+        : [];
+
+      const contractForCurrentType = records.find((record) => record.contract_type === currentContract);
+      const preferredCategory = contractForCurrentType?.contract_category || currentCategory;
+      const nextCategory = this.updateDropdownFieldOptions(
+        marketSettingsBlock ?? categoryBlock,
+        "CONTRACT_CATEGORY",
+        categoryOptions,
+        preferredCategory,
+        contractForCurrentType?.contract_category_display || contractForCurrentType?.contract_category || null,
+      ) ?? preferredCategory;
+      this.selectedContractCategory = nextCategory;
+      if (categoryBlock && categoryBlock !== marketSettingsBlock) {
+        this.updateDropdownFieldOptions(
+          categoryBlock,
+          "CONTRACT_CATEGORY",
+          categoryOptions,
+          nextCategory,
+          contractForCurrentType?.contract_category_display || nextCategory,
+        );
+      }
+
+      const contractRecords = records.length ? records.filter((record) => record.contract_category === nextCategory) : [];
+      const contractOptionSource = contractRecords.length ? contractRecords : records;
+      const contractOptions = contractOptionSource.length
+        ? Array.from(
+            new Map(
+              contractOptionSource.map((record) => [
+                record.contract_type,
+                {
+                  label: record.contract_display || record.contract_type,
+                  value: record.contract_type,
+                },
+              ]),
+            ).values(),
+          )
+        : [];
+
+      const contractOptionsValues = new Set(contractOptions.map((option) => option.value));
+      const preferredContract =
+        (contractRecords.find((record) => record.contract_type === currentContract)?.contract_type ?? "") ||
+        (contractOptionsValues.has(this.selectedContractType) ? this.selectedContractType : "") ||
+        currentContract;
+
+      const preferredContractRecord = contractOptionSource.find((record) => record.contract_type === preferredContract) ?? null;
+      const nextContract = this.updateDropdownFieldOptions(
+        marketSettingsBlock ?? contractBlock,
+        "CONTRACT_TYPE",
+        contractOptions,
+        preferredContract,
+        preferredContractRecord?.contract_display || preferredContractRecord?.contract_type || null,
+      ) ?? preferredContract;
+      this.selectedContractType = nextContract;
+      if (contractBlock && contractBlock !== marketSettingsBlock) {
+        const selectedRecord = contractOptionSource.find((record) => record.contract_type === nextContract) ?? null;
+        this.updateDropdownFieldOptions(
+          contractBlock,
+          "CONTRACT_TYPE",
+          contractOptions,
+          nextContract,
+          selectedRecord?.contract_display || selectedRecord?.contract_type || null,
+        );
+      }
+    } finally {
+      this.syncingContractMetadata = false;
+    }
+  }
+
+  private syncSymbolDropdowns(): void {
+    if (!this.workspace || this.syncingContractMetadata) return;
+
+    this.syncingContractMetadata = true;
+    try {
+      const symbolOptions = this.feedSymbols
+        .map((item) => {
+          const value = safeString(item.name ?? item.symbol ?? "");
+          if (!value) return null;
+          const label = safeString(item.display_name ?? item.name ?? item.symbol ?? value) || value;
+          return { label, value };
+        })
+        .filter((item): item is { label: string; value: string } => Boolean(item));
+
+      const blocks = this.workspace.getAllBlocks(false).filter((block: any) => {
+        return typeof block?.getField === "function" && typeof block?.getFieldValue === "function" && Boolean(block.getField("SYMBOL"));
+      });
+
+      for (const block of blocks) {
+        const currentValue = safeString(block.getFieldValue("SYMBOL"));
+        const preferred = symbolOptions.find((option) => option.value === currentValue) ?? null;
+        this.updateDropdownFieldOptions(
+          block,
+          "SYMBOL",
+          symbolOptions,
+          preferred?.value || currentValue || null,
+          preferred?.label || currentValue || null,
+        );
+      }
+    } finally {
+      this.syncingContractMetadata = false;
+    }
+  }
+
+  private waitForWsEvent<T>(eventName: string, timeoutMs = 20000): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        cleanup();
+        reject(new Error(`Timed out waiting for ${eventName}`));
+      }, timeoutMs);
+
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        wsService.off(eventName, handler);
+        wsService.off("error", handleError);
+      };
+
+      const handler = (payload: T) => {
+        cleanup();
+        resolve(payload);
+      };
+
+      const handleError = (error: unknown) => {
+        cleanup();
+        reject(new Error(this.extractErrorMessage(error, `Failed while waiting for ${eventName}`)));
+      };
+
+      wsService.on(eventName, handler);
+      wsService.on("error", handleError);
+    });
+  }
+
+  private async ensureAuthenticated(): Promise<void> {
+    if (wsService.isAuthenticated()) return;
+
+    const attempts: Array<{ label: string; token: string }> = [];
+    const storedToken = this.getStoredAuthToken();
+    if (storedToken) {
+      attempts.push({ label: "stored", token: storedToken });
+    }
+
+    const injectedToken = this.getInjectedAuthToken();
+    if (injectedToken && injectedToken !== storedToken) {
+      attempts.push({ label: "injected", token: injectedToken });
+    }
+
+    let lastError: unknown = null;
+    for (const attempt of attempts) {
+      try {
+        await this.authenticateWithToken(attempt.token);
+        return;
+      } catch (error) {
+        lastError = error;
+        this.appendWsEventLog("auth_failed", {
+          source: attempt.label,
+          message: this.extractErrorMessage(error, "Authentication failed"),
+        });
+        if (!this.isAuthFailure(error)) {
+          throw error;
+        }
+        wsService.disconnect();
+      }
+    }
+
+    try {
+      const freshToken = await this.bootstrapAuthToken();
+      wsService.disconnect();
+      await this.authenticateWithToken(freshToken);
+      return;
+    } catch (error) {
+      if (lastError && this.isAuthFailure(lastError)) {
+        throw lastError;
+      }
+      throw error;
+    }
+  }
+
+  private createOrderPayload(snapshot: StrategySnapshot): Record<string, unknown> | null {
+    if (!snapshot.apiPayload) return null;
+    return {
+      ...snapshot.apiPayload,
+      request: "order_buy",
+    };
+  }
+
+  private async ensureSymbolSubscription(symbol: string): Promise<void> {
+    const nextSymbol = symbol.trim() || DEFAULT_SYMBOL;
+    if (this.subscribedSymbol === nextSymbol) return;
+    if (this.subscribedSymbol && this.subscribedSymbol !== nextSymbol) {
+      wsService.unsubscribe(this.subscribedSymbol);
+    }
+    wsService.subscribe(nextSymbol);
+    this.subscribedSymbol = nextSymbol;
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 750));
+  }
+
+  private async runLiveTrade(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    await this.ensureAuthenticated();
+
+    const symbol = String(payload.symbol ?? DEFAULT_SYMBOL).trim() || DEFAULT_SYMBOL;
+    await this.ensureSymbolSubscription(symbol);
+
+    const orderParams = {
+      symbol,
+      contract_type: String(payload.contract_type ?? "UP"),
+      stake: Number(payload.stake ?? 10),
+      duration: Number(payload.duration ?? 5),
+      duration_unit: String(payload.duration_unit ?? "t"),
+      barrier: payload.barrier as number | undefined,
+      barrier_low: payload.barrier_low as number | undefined,
+      barrier_high: payload.barrier_high as number | undefined,
+      digit_target: payload.digit_target as number | undefined,
+      digit_low: payload.digit_low as number | undefined,
+      digit_high: payload.digit_high as number | undefined,
+    };
+
+    const orderWait = this.waitForWsEvent<Record<string, unknown>>("order");
+    const orderOk = wsService.placeOrder(orderParams);
+
+    if (!orderOk) {
+      throw new Error("Failed to place order");
+    }
+
+    this.appendWsEventLog("order_sent", orderParams);
+    void orderWait
+      .then((order) => {
+        const orderData = (order.data as Record<string, unknown> | undefined) ?? order;
+        this.appendWsEventLog("order_acknowledged", orderData);
+      })
+      .catch((error) => {
+        this.appendWsEventLog("order_wait_error", {
+          message: this.extractErrorMessage(error, "Order acknowledgement wait failed"),
+        });
+      });
+
+    return {
+      request: "order_buy",
+      type: "order_buy",
+      ...orderParams,
+      pending: true,
+    };
   }
 
   private getFirstTemplateForGroup(categoryId: string, groupId: string): BlockTemplate | null {
@@ -1288,12 +2555,12 @@ class BotBuilderApp {
 
   private placeBlockWithinSection(sectionBlock: any, blocks: any[], sectionId: SectionId): void {
     const anchor = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
-    const isWide = sectionId === "market" || sectionId === "execution";
-    const columns = isWide ? 2 : 1;
-    const startX = anchor.x + 16;
-    const startY = anchor.y + 56;
-    const columnGap = isWide ? 238 : 0;
-    const rowGap = 70;
+    const startX = anchor.x + 248;
+    const startY = anchor.y + 60;
+    const rowGap =
+      sectionId === "market" ? 108 :
+      sectionId === "execution" ? 122 :
+      100;
 
     blocks
       .slice()
@@ -1303,10 +2570,8 @@ class BotBuilderApp {
         return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
       })
       .forEach((block, index) => {
-        const col = index % columns;
-        const row = Math.floor(index / columns);
-        const x = startX + col * columnGap;
-        const y = startY + row * rowGap;
+        const x = startX;
+        const y = startY + index * rowGap;
 
         if (typeof block.moveBy === "function") {
           const current = block.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
@@ -1354,6 +2619,7 @@ class BotBuilderApp {
   private seedWorkspace(resetExisting = false, symbol = DEFAULT_SYMBOL, includeStarterBlocks = true): void {
     if (!this.workspace) return;
     const Blockly = getBlockly();
+    const liveSymbol = this.root.querySelector<HTMLSelectElement>("#bb-market-select")?.value?.trim() || symbol;
 
     if (resetExisting) {
       this.workspace.clear();
@@ -1365,104 +2631,108 @@ class BotBuilderApp {
 
     Blockly.Events.disable();
     try {
-      const root = this.workspace.newBlock("strategy_root");
-      root.initSvg();
-      root.render();
-      root.moveBy(40, 40);
-      root.setFieldValue("Volatility Blueprint", "BOT_NAME");
-      root.setFieldValue("draft", "MODE");
+      const sections: Array<{ id: SectionId; blocks: any[]; height: number }> = [];
 
-      const sections: Array<{ id: SectionId; x: number; y: number }> = [
-        { id: "market", x: 88, y: 116 },
-        { id: "execution", x: 468, y: 116 },
-        { id: "indicators", x: 88, y: 456 },
-        { id: "conditions", x: 468, y: 456 },
-        { id: "restart", x: 88, y: 792 },
-        { id: "utility", x: 468, y: 792 },
-      ];
-
-      for (const section of sections) {
+      for (const section of [
+        { id: "market", height: 660 },
+        { id: "execution", height: 880 },
+        { id: "indicators", height: 560 },
+        { id: "conditions", height: 560 },
+        { id: "restart", height: 440 },
+        { id: "utility", height: 440 },
+      ] as Array<{ id: SectionId; height: number }>) {
         const sectionBlock = this.workspace.newBlock(getSectionBlockType(section.id));
         sectionBlock.initSvg();
         sectionBlock.render();
-        sectionBlock.moveBy(section.x, section.y);
-
-        const input = root.getInput(getSectionInputName(section.id));
-        if (input?.connection?.isConnected()) {
-          input.connection.disconnect();
-        }
-        if (input?.connection) {
-          input.connection.connect(sectionBlock.previousConnection);
-        }
+        sections.push({ id: section.id, blocks: [], height: section.height });
       }
 
       if (includeStarterBlocks) {
-        const marketKindBlock = this.workspace.newBlock("market_kind");
-        marketKindBlock.initSvg();
-        marketKindBlock.render();
-        marketKindBlock.setFieldValue("derived", "MARKET_KIND");
+        const marketSettingsBlock = this.workspace.newBlock("market_settings");
+        marketSettingsBlock.initSvg();
+        marketSettingsBlock.render();
+        this.updateDropdownFieldOptions(marketSettingsBlock, "SYMBOL", [], liveSymbol, liveSymbol);
+        this.updateDropdownFieldOptions(marketSettingsBlock, "CONTRACT_CATEGORY", [], "PATH_INDEPENDENT", "PATH_INDEPENDENT");
+        this.updateDropdownFieldOptions(marketSettingsBlock, "CONTRACT_TYPE", [], "UP", "UP");
+        // marketSettingsBlock.setFieldValue("TRUE", "LIVE_SYNC");
+        this.selectedContractCategory = "PATH_INDEPENDENT";
+        this.selectedContractType = "UP";
 
-        const marketSymbolBlock = this.workspace.newBlock("market_symbol");
-        marketSymbolBlock.initSvg();
-        marketSymbolBlock.render();
-        marketSymbolBlock.setFieldValue(symbol, "SYMBOL");
+        const executionSettingsBlock = this.workspace.newBlock("execution_settings");
+        executionSettingsBlock.initSvg();
+        executionSettingsBlock.render();
+        executionSettingsBlock.setFieldValue("10", "STAKE");
+        executionSettingsBlock.setFieldValue("5", "DURATION");
+        executionSettingsBlock.setFieldValue("t", "DURATION_UNIT");
+        // executionSettingsBlock.setFieldValue("TRUE", "AUTO_RETRY");
 
-        const marketCategoryBlock = this.workspace.newBlock("market_category");
-        marketCategoryBlock.initSvg();
-        marketCategoryBlock.render();
-        marketCategoryBlock.setFieldValue("path_independent", "CONTRACT_CATEGORY");
+        const barrierBlock = this.workspace.newBlock("market_barrier");
+        barrierBlock.initSvg();
+        barrierBlock.render();
+        barrierBlock.setFieldValue("single", "BARRIER_MODE");
 
-        const marketContractBlock = this.workspace.newBlock("market_contract");
-        marketContractBlock.initSvg();
-        marketContractBlock.render();
-        marketContractBlock.setFieldValue("UP", "CONTRACT_TYPE");
+        const digitTargetBlock = this.workspace.newBlock("market_digits");
+        digitTargetBlock.initSvg();
+        digitTargetBlock.render();
+        digitTargetBlock.setFieldValue("MATCHES", "DIGIT_OPERATOR");
 
-        const marketSyncBlock = this.workspace.newBlock("market_sync");
-        marketSyncBlock.initSvg();
-        marketSyncBlock.render();
-        marketSyncBlock.setFieldValue("TRUE", "LIVE_SYNC");
+        const digitRangeBlock = this.workspace.newBlock("market_range");
+        digitRangeBlock.initSvg();
+        digitRangeBlock.render();
 
-        const executionStakeBlock = this.workspace.newBlock("execution_stake");
-        executionStakeBlock.initSvg();
-        executionStakeBlock.render();
-        executionStakeBlock.setFieldValue("10", "STAKE");
+        const indicatorsSettingsBlock = this.workspace.newBlock("indicators_settings");
+        indicatorsSettingsBlock.initSvg();
+        indicatorsSettingsBlock.render();
+        this.updateDropdownFieldOptions(indicatorsSettingsBlock, "SYMBOL", [], liveSymbol, liveSymbol);
 
-        const executionDurationBlock = this.workspace.newBlock("execution_duration");
-        executionDurationBlock.initSvg();
-        executionDurationBlock.render();
-        executionDurationBlock.setFieldValue("5", "DURATION");
+        const conditionsSettingsBlock = this.workspace.newBlock("conditions_settings");
+        conditionsSettingsBlock.initSvg();
+        conditionsSettingsBlock.render();
 
-        const executionUnitBlock = this.workspace.newBlock("execution_unit");
-        executionUnitBlock.initSvg();
-        executionUnitBlock.render();
-        executionUnitBlock.setFieldValue("t", "DURATION_UNIT");
+        const restartSettingsBlock = this.workspace.newBlock("restart_settings");
+        restartSettingsBlock.initSvg();
+        restartSettingsBlock.render();
 
-        const executionRetryBlock = this.workspace.newBlock("execution_retry");
-        executionRetryBlock.initSvg();
-        executionRetryBlock.render();
-        executionRetryBlock.setFieldValue("TRUE", "AUTO_RETRY");
+        const utilitySettingsBlock = this.workspace.newBlock("utility_settings");
+        utilitySettingsBlock.initSvg();
+        utilitySettingsBlock.render();
+        this.syncSymbolDropdowns();
 
-        const marketBlocks = [
-          marketKindBlock,
-          marketSymbolBlock,
-          marketCategoryBlock,
-          marketContractBlock,
-          marketSyncBlock,
-        ];
+        const marketBlocks = [marketSettingsBlock];
         const executionBlocks = [
-          executionStakeBlock,
-          executionDurationBlock,
-          executionUnitBlock,
-          executionRetryBlock,
+          executionSettingsBlock,
+          barrierBlock,
+          digitTargetBlock,
+          digitRangeBlock,
         ];
+        const indicatorsBlocks = [indicatorsSettingsBlock];
+        const conditionsBlocks = [conditionsSettingsBlock];
+        const restartBlocks = [restartSettingsBlock];
+        const utilityBlocks = [utilitySettingsBlock];
+        sections[0].blocks = marketBlocks;
+        sections[1].blocks = executionBlocks;
+        sections[2].blocks = indicatorsBlocks;
+        sections[3].blocks = conditionsBlocks;
+        sections[4].blocks = restartBlocks;
+        sections[5].blocks = utilityBlocks;
+      }
 
-        this.placeSectionBlocks("market", marketBlocks);
-        this.placeSectionBlocks("execution", executionBlocks);
-        this.connectSectionBlocks("market", marketBlocks);
-        this.connectSectionBlocks("execution", executionBlocks);
+      let yCursor = 116;
+      for (const section of sections) {
+        const sectionBlock = this.findBlockByType(getSectionBlockType(section.id));
+        if (sectionBlock) {
+          const current = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
+          sectionBlock.moveBy(72 - current.x, yCursor - current.y);
+        }
+        if (includeStarterBlocks) {
+          this.placeSectionBlocks(section.id, section.blocks);
+          this.connectSectionBlocks(section.id, section.blocks);
+        }
+        yCursor += section.height;
       }
 
       this.normalizeAllSections();
+      this.syncExecutionHelperVisibility();
     } finally {
       Blockly.Events.enable();
     }
@@ -1482,16 +2752,13 @@ class BotBuilderApp {
   private buildStrategySnapshot(): StrategySnapshot {
     const sections = this.buildSectionsSnapshot();
     const allBlocks = sections.flatMap((section) => section.blocks);
-    const root = this.findBlockByType("strategy_root");
-    const botName = root ? safeString(root.getFieldValue("BOT_NAME") ?? "Volatility Blueprint") : "Volatility Blueprint";
-    const mode = root ? safeString(root.getFieldValue("MODE") ?? "draft") : "draft";
     const domain = convertBlocksToSnapshot(allBlocks);
     const apiPayload = createApiPayload(domain as StrategySnapshot);
 
     return {
       meta: {
-        botName,
-        mode,
+        botName: "Volatility Blueprint",
+        mode: "draft",
         updatedAt: new Date().toISOString(),
       },
       market: (domain.market as Record<string, unknown> | undefined) ?? null,
@@ -1596,10 +2863,10 @@ class BotBuilderApp {
     return Blockly.Xml.domToText(xmlDom);
   }
 
-  private runStrategy(): void {
+  private async runStrategy(): Promise<void> {
     if (!this.lastSnapshot) return;
 
-    const payload = this.lastSnapshot.apiPayload;
+    const payload = this.createOrderPayload(this.lastSnapshot);
     const validation = payload
       ? validationService.validateApiPayload(payload)
       : { valid: false, errors: ["Build market and execution blocks first."], warnings: [] };
@@ -1607,25 +2874,7 @@ class BotBuilderApp {
     const statusCaption = this.root.querySelector<HTMLElement>("#bb-status-caption");
     const resultsEl = this.root.querySelector<HTMLElement>("#bb-results");
 
-    if (validation.valid) {
-      if (statusPill) {
-        statusPill.className = "bb-status-pill is-ready";
-        statusPill.textContent = "Ready";
-      }
-      if (statusCaption) {
-        statusCaption.textContent = "Payload JSON is ready for copy or export.";
-      }
-      if (resultsEl) {
-        resultsEl.innerHTML = `
-          <div class="bb-result-ok">Offline preview ready.</div>
-          <div class="bb-result-meta">
-            <div><strong>Payload</strong><span>Valid JSON</span></div>
-            <div><strong>Symbol</strong><span>${safeString(payload?.symbol ?? DEFAULT_SYMBOL)}</span></div>
-            <div><strong>Contract</strong><span>${safeString(payload?.contract_type ?? "UP")}</span></div>
-          </div>
-        `;
-      }
-    } else {
+    if (!validation.valid) {
       if (statusPill) {
         statusPill.className = "bb-status-pill is-error";
         statusPill.textContent = "Blocked";
@@ -1635,9 +2884,82 @@ class BotBuilderApp {
       }
       if (resultsEl) {
         resultsEl.innerHTML = `
-          <div class="bb-result-error">Offline preview unavailable yet.</div>
+          <div class="bb-result-error">Strategy is not ready yet.</div>
           <div class="bb-result-list">${validation.errors.map((error) => `<div>${error}</div>`).join("")}</div>
         `;
+      }
+      return;
+    }
+
+    if (!payload) return;
+
+    if (!wsService.isConnected() || !wsService.isAuthenticated()) {
+      const message = "Connect first, then run the strategy.";
+      if (statusPill) {
+        statusPill.className = "bb-status-pill is-error";
+        statusPill.textContent = "Not connected";
+      }
+      if (statusCaption) {
+        statusCaption.textContent = message;
+      }
+      if (resultsEl) {
+        resultsEl.innerHTML = `<div class="bb-result-error">${message}</div>`;
+      }
+      return;
+    }
+
+    if (statusPill) {
+      statusPill.className = "bb-status-pill is-ready";
+      statusPill.textContent = "Running";
+    }
+    if (statusCaption) {
+      statusCaption.textContent = "Submitting a demo trade over the websocket connection.";
+    }
+    if (resultsEl) {
+      resultsEl.innerHTML = `
+        <div class="bb-result-ok">Connecting to demo account...</div>
+        <div class="bb-result-meta">
+          <div><strong>Symbol</strong><span>${safeString(payload?.symbol ?? DEFAULT_SYMBOL)}</span></div>
+          <div><strong>Contract</strong><span>${safeString(payload?.contract_type ?? "UP")}</span></div>
+          <div><strong>Stake</strong><span>${String(payload?.stake ?? 10)}</span></div>
+        </div>
+      `;
+    }
+
+    this.appendWsEventLog("run", {
+      symbol: payload.symbol ?? DEFAULT_SYMBOL,
+      contract_type: payload.contract_type ?? "UP",
+      duration: payload.duration ?? 5,
+      duration_unit: payload.duration_unit ?? "t",
+    });
+
+    try {
+      const orderData = await this.runLiveTrade(payload);
+      const lifecycle = this.buildTradeLifecycle(payload, orderData);
+      this.setCurrentLifecycle(lifecycle, "Demo trade request sent", "Waiting for websocket order, activation, and settlement events.");
+      const contractId = orderData.contract_id ?? orderData.contractId ?? "pending";
+      const payout = orderData.payout ?? orderData.profit ?? "n/a";
+      const sessionType = orderData.session_type ?? "demo";
+
+      if (statusPill) {
+        statusPill.className = "bb-status-pill is-ready";
+        statusPill.textContent = "Trade running";
+      }
+      if (statusCaption) {
+        statusCaption.textContent = "Order request sent. Waiting for activation and settlement from the feed.";
+      }
+      this.updateFeedStatus(`Trade request sent on ${String(sessionType)} account #${String(contractId)}. Payout ${String(payout)}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Trade execution failed";
+      if (statusPill) {
+        statusPill.className = "bb-status-pill is-error";
+        statusPill.textContent = "Error";
+      }
+      if (statusCaption) {
+        statusCaption.textContent = message;
+      }
+      if (resultsEl) {
+        resultsEl.innerHTML = `<div class="bb-result-error">${message}</div>`;
       }
     }
   }
@@ -1690,19 +3012,23 @@ class BotBuilderApp {
       this.workspace.clear();
       this.seedWorkspace(true, DEFAULT_SYMBOL, false);
 
-      const root = this.findBlockByType("strategy_root");
-      if (root) {
-        root.setFieldValue(snapshot.meta?.botName ?? "Volatility Blueprint", "BOT_NAME");
-        root.setFieldValue(snapshot.meta?.mode ?? "draft", "MODE");
-      }
-
       const marketSelect = this.root.querySelector<HTMLSelectElement>("#bb-market-select");
       if (marketSelect && snapshot.market && typeof snapshot.market === "object") {
         const symbol = safeString((snapshot.market as Record<string, unknown>).symbol ?? DEFAULT_SYMBOL);
         if (symbol) {
           marketSelect.value = symbol;
+          const marketSettingsBlock = this.findBlockByType("market_settings");
+          const marketSymbolBlock = this.findBlockByType("market_symbol");
+          if (marketSettingsBlock) {
+            this.updateDropdownFieldOptions(marketSettingsBlock, "SYMBOL", [], symbol, symbol);
+          }
+          if (marketSymbolBlock) {
+            this.updateDropdownFieldOptions(marketSymbolBlock, "SYMBOL", [], symbol, symbol);
+          }
         }
       }
+      void this.requestContractTypesForSymbol(this.getSelectedMarketSymbol());
+      this.syncMarketDropdowns();
 
       const sectionMap = new Map<SectionId, any>();
       for (const section of SECTION_DEFINITIONS) {
@@ -1730,6 +3056,7 @@ class BotBuilderApp {
       }
 
       this.normalizeAllSections();
+      this.syncExecutionHelperVisibility();
       this.refreshAllPanels();
     } finally {
       Blockly.Events.enable();
