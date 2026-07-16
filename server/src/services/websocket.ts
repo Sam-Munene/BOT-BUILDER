@@ -1,7 +1,3 @@
-/**
- * WebSocket Service - HFT19 API Connection
- */
-
 export const CONNECTION_STATUS = {
   DISCONNECTED: 'disconnected',
   CONNECTING: 'connecting',
@@ -17,7 +13,7 @@ export interface WebSocketMessage {
   code?: number;
   type?: string;
   data?: any;
-  message?: string;
+  message?: unknown;
   symbol?: string;
   price?: number;
   epoch_ms?: number;
@@ -51,9 +47,17 @@ export class WebSocketService {
   private maxReconnectAttempts: number = 5;
   private reconnectDelay: number = 1000;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-  private wsUrl: string = 'wss://hftserver.safarigari.com';
+  private wsUrl: string = 'wss://hft.derinance.com';
+  private authToken: string | null = null;
+  private authenticated: boolean = false;
+  private suppressReconnectOnce: boolean = false;
+  private authenticateOnOpen: boolean = true;
 
-  connect(token: string | null = null): void {
+  connect(token: string | null = null, authenticateOnOpen = true): void {
+    if (token !== null) {
+      this.authToken = token.trim() || null;
+    }
+    this.authenticateOnOpen = authenticateOnOpen;
     if (this.ws && this.status === CONNECTION_STATUS.CONNECTED) return;
 
     this.status = CONNECTION_STATUS.CONNECTING as ConnectionStatus;
@@ -67,7 +71,11 @@ export class WebSocketService {
         this.reconnectAttempts = 0;
         this.emit('statusChange', this.status);
         this.emit('connected');
-        if (token) this.authenticate(token);
+        this.send({ request: 'ping' });
+        this.requestSymbols();
+        if (this.authenticateOnOpen && this.authToken) {
+          this.authenticate(this.authToken);
+        }
       };
 
       this.ws.onmessage = (event: MessageEvent) => {
@@ -86,15 +94,24 @@ export class WebSocketService {
         console.error('WebSocket error:', error);
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event: CloseEvent) => {
         this.status = CONNECTION_STATUS.DISCONNECTED as ConnectionStatus;
         this.emit('statusChange', this.status);
-        this.emit('disconnected');
+        this.emit('disconnected', {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean,
+        });
+        if (this.suppressReconnectOnce) {
+          this.suppressReconnectOnce = false;
+          return;
+        }
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
           this.reconnectAttempts++;
           const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
           if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-          this.reconnectTimeout = setTimeout(() => this.connect(token), delay);
+          const nextToken = this.authToken ?? token;
+          this.reconnectTimeout = setTimeout(() => this.connect(nextToken, this.authenticateOnOpen), delay);
         }
       };
     } catch (error) {
@@ -106,7 +123,43 @@ export class WebSocketService {
   }
 
   authenticate(token: string): boolean {
+    this.authToken = token.trim() || null;
+    this.authenticated = false;
     return this.send({ request: 'auth', token });
+  }
+
+  private asRecord(value: unknown): Record<string, any> | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return value as Record<string, any>;
+  }
+
+  private extractAuthenticatedData(data: WebSocketMessage): Record<string, any> | null {
+    const nested = data.data ?? data.message;
+    const payload =
+      nested && typeof nested === "object" && !Array.isArray(nested)
+        ? nested
+        : data && typeof data === "object"
+          ? data
+          : null;
+
+    if (!payload) return null;
+
+    const hasAuthShape =
+      "user_id" in payload ||
+      "is_demo" in payload ||
+      data.type === "authenticated" ||
+      data.request === "auth";
+
+    return hasAuthShape ? payload : null;
+  }
+
+  private extractEventPayload(data: WebSocketMessage): Record<string, any> | null {
+    const candidates = [data.data, data.message, data];
+    for (const candidate of candidates) {
+      const record = this.asRecord(candidate);
+      if (record) return record;
+    }
+    return null;
   }
 
   send(data: Record<string, any>): boolean {
@@ -124,20 +177,47 @@ export class WebSocketService {
   }
 
   private handleMessage(data: WebSocketMessage): void {
-    if (data.status === 'ok' && data.data?.user_id) {
-      this.emit('authenticated', data.data);
+    const authenticatedData = this.extractAuthenticatedData(data);
+    if (data.status === 'ok' && authenticatedData) {
+      this.authenticated = true;
+      this.emit('authenticated', authenticatedData);
       return;
     }
-    if (data.type === 'tick') {
+    const payload = this.extractEventPayload(data);
+    if (data.status === 'ok' && Array.isArray(data.data)) {
+      this.emit('symbols', data.data);
+      return;
+    }
+    if (data.status === 'ok' && payload && Array.isArray((payload as Record<string, unknown>).contract_types)) {
+      this.emit('contract_types', payload);
+      return;
+    }
+    const message = data as unknown as { message?: unknown };
+    if (data.status === 'ok' && Array.isArray(message.message)) {
+      this.emit('symbols', message.message);
+      return;
+    }
+    const eventType = String(payload?.type ?? data.type ?? payload?.request ?? data.request ?? "").trim();
+    const requestType = String(payload?.request ?? data.request ?? "").trim();
+
+    if (eventType === 'tick' || requestType === 'tick') {
       this.emit('tick', data);
       return;
     }
-    if (data.data?.type === 'proposal') {
-      this.emit('proposal', data.data);
+    if (eventType === 'proposal' || requestType === 'proposal') {
+      this.emit('proposal', payload);
       return;
     }
-    if (data.data?.type === 'order_buy') {
-      this.emit('order', data.data);
+    if (eventType === 'order_buy' || eventType === 'contract_created' || requestType === 'order_buy' || requestType === 'contract_created') {
+      this.emit('order', payload);
+      return;
+    }
+    if (eventType === 'contract_activated' || requestType === 'contract_activated') {
+      this.emit('contract_activated', payload);
+      return;
+    }
+    if (eventType === 'contract_settled' || eventType === 'contract_settlement' || requestType === 'contract_settled' || requestType === 'contract_settlement') {
+      this.emit('contract_settled', payload);
       return;
     }
     if (data.status === 'error') {
@@ -145,6 +225,14 @@ export class WebSocketService {
       return;
     }
     this.emit('message', data);
+  }
+
+  requestSymbols(): boolean {
+    return this.send({ request: 'symbols' });
+  }
+
+  requestContractTypes(symbol: string): boolean {
+    return this.send({ request: 'contract_types', symbol });
   }
 
   subscribe(symbol: string): boolean {
@@ -157,6 +245,10 @@ export class WebSocketService {
 
   placeOrder(params: OrderParams): boolean {
     return this.send({ request: 'order_buy', ...params });
+  }
+
+  requestProposal(params: OrderParams): boolean {
+    return this.send({ request: 'proposal', ...params });
   }
 
   on(event: string, handler: WebSocketEventHandler): void {
@@ -185,11 +277,13 @@ export class WebSocketService {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
+    this.suppressReconnectOnce = true;
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
     this.status = CONNECTION_STATUS.DISCONNECTED as ConnectionStatus;
+    this.authenticated = false;
     this.emit('statusChange', this.status);
   }
 
@@ -199,6 +293,14 @@ export class WebSocketService {
 
   isConnected(): boolean {
     return this.status === CONNECTION_STATUS.CONNECTED;
+  }
+
+  isAuthenticated(): boolean {
+    return this.authenticated;
+  }
+
+  getAuthToken(): string | null {
+    return this.authToken;
   }
 }
 

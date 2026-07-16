@@ -28,7 +28,7 @@ export function registerUtilityBlocks(Blockly: BlocklyInterface): void {
         type: 'websocket_connection',
         message0: '🔌 WebSocket Connection',
         message1: 'URL %1',
-        args1: [{ type: 'field_input', name: 'WS_URL', text: 'wss://hftserver.safarigari.com' }],
+        args1: [{ type: 'field_input', name: 'WS_URL', text: 'wss://hft.safarigari.com' }],
         message2: 'Token %1',
         args2: [{ type: 'field_input', name: 'TOKEN', text: '' }],
         colour: '#1e293b',

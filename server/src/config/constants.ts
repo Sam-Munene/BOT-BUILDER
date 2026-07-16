@@ -4,7 +4,7 @@
 
 export const CONFIG = {
   API: {
-    WS_URL: 'wss://hftserver.safarigari.com',
+    WS_URL: 'wss://hft.safarigari.com',
     REST_URL: 'https://api.safarigari.com',
   },
 } as const;

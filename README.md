@@ -8,6 +8,22 @@ npm install
 npm run dev
 ```
 
+## Auth token setup
+
+For local development, create a `.env.local` file in the `bot-builder` project root and paste your demo token there:
+
+```bash
+BOT_BUILDER_AUTH_TOKEN=your-demo-token-here
+```
+
+You can also use:
+
+```bash
+VITE_BOT_BUILDER_AUTH_TOKEN=your-demo-token-here
+```
+
+The webpack app reads that file at build time and pre-fills the demo JWT field with the token. You can still override it in the UI if you want to test a different session.
+
 ## Production deployment on the server
 
 1. Go to the `bot-builder` directory on the server.
@@ -64,6 +80,6 @@ Use `nginx.bot.derinance.com.ssl.conf.example` on the host nginx side.
 
 It proxies HTTPS traffic to the Docker container on `127.0.0.1:48185`.
 
-The deploy script will try your requested `APP_PORT` first, then fall back to a free port starting at `48185` if the requested one is already busy.
+Keep `APP_PORT` aligned with that nginx upstream. The deploy script now keeps the service on the chosen port instead of silently falling back, so a redeploy will continue to work with the fixed nginx config.
 
 Do not enable the SSL server block until Let’s Encrypt has issued the certs for `bot.derinance.com`.

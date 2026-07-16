@@ -16,38 +16,6 @@ port_in_use() {
   return 1
 }
 
-pick_port() {
-  local requested_port="${APP_PORT:-}"
-  local candidates=()
-  local offset
-
-  if [ -n "$requested_port" ]; then
-    candidates+=("$requested_port")
-  fi
-
-  for offset in 0 1 2 3 4 5; do
-    candidates+=("$((DEFAULT_APP_PORT + offset))")
-  done
-
-  local port
-  for port in "${candidates[@]}"; do
-    if ! port_in_use "$port"; then
-      echo "$port"
-      return 0
-    fi
-  done
-
-  return 1
-}
-
-SELECTED_APP_PORT="$(pick_port)" || {
-  echo "No free port found for bot-builder."
-  exit 1
-}
-
-export APP_PORT="$SELECTED_APP_PORT"
-echo "Using host port $APP_PORT"
-
 if command -v docker-compose >/dev/null 2>&1; then
   COMPOSE_CMD=(docker-compose)
 elif docker compose version >/dev/null 2>&1; then
@@ -62,6 +30,15 @@ git pull --ff-only origin main
 
 echo "Stopping any running stack..."
 "${COMPOSE_CMD[@]}" down || true
+
+APP_PORT="${APP_PORT:-$DEFAULT_APP_PORT}"
+if port_in_use "$APP_PORT"; then
+  echo "Port $APP_PORT is still busy. Stop the conflicting service or choose a different APP_PORT and update nginx to match."
+  exit 1
+fi
+
+export APP_PORT
+echo "Using host port $APP_PORT"
 
 echo "Building production image..."
 if [ "${FORCE_REBUILD:-0}" = "1" ]; then

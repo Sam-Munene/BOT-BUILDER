@@ -289,15 +289,15 @@ export class ValidationService {
     const contractType = payload.contract_type;
     const errors: string[] = [];
 
-    if (this.requiresBarrier(contractType) && !payload.barrier) {
+    if (this.requiresBarrier(contractType) && payload.barrier === undefined) {
       errors.push(`Barrier is required for ${contractType}`);
     }
 
     if (this.requiresDoubleBarrier(contractType)) {
-      if (!payload.barrier_low || !payload.barrier_high) {
+      if (payload.barrier_low === undefined || payload.barrier_high === undefined) {
         errors.push(`Double barrier is required for ${contractType}`);
       }
-      if (payload.barrier_low >= payload.barrier_high) {
+      if (payload.barrier_low !== undefined && payload.barrier_high !== undefined && payload.barrier_low >= payload.barrier_high) {
         errors.push('Lower barrier must be less than upper barrier');
       }
     }
@@ -312,7 +312,7 @@ export class ValidationService {
     }
 
     if (this.requiresDigitRange(contractType)) {
-      if (!payload.digit_low || !payload.digit_high) {
+      if (payload.digit_low === undefined || payload.digit_high === undefined) {
         errors.push(`Digit range is required for ${contractType}`);
       }
       if (payload.digit_low !== undefined && payload.digit_high !== undefined) {
