@@ -616,7 +616,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
       {
         kind: "dropdown",
         name: "DURATION_UNIT",
-        label: "Unit",
+        label: " Duration Unit",
         defaultValue: "t",
         options: DURATION_UNIT_OPTIONS,
       },
@@ -676,7 +676,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
       {
         kind: "dropdown",
         name: "DURATION_UNIT",
-        label: "Unit",
+        label: "Duration Unit",
         defaultValue: "t",
         options: DURATION_UNIT_OPTIONS,
       },
