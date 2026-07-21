@@ -61,6 +61,7 @@ type ModalState = {
 };
 
 type TradeLifecycleStageKey = "order" | "activated" | "expiry";
+type TradeOutcome = "won" | "lost" | "unknown";
 
 type TradeLifecycleStage = {
   key: TradeLifecycleStageKey;
@@ -68,7 +69,7 @@ type TradeLifecycleStage = {
   status: "done" | "pending" | "active";
   timeMs: number;
   price?: number | null;
-  contractId?: string | number | null;
+  contractId?: string | null;
   note: string;
   rawPayload?: Record<string, unknown> | null;
 };
@@ -110,6 +111,7 @@ const SECTION_BLOCK_TYPES: Record<SectionId, string> = {
 const DEFAULT_SYMBOL = "VIX_100";
 const DEFAULT_CATEGORY = "market";
 const AUTH_STORAGE_KEY = "botbuilder-auth-token";
+const FEED_SESSION_STORAGE_KEY = "botbuilder-feed-session";
 const AUTH_API_BASE = "http://212.95.35.81:70/api/v1";
 
 type BotBuilderAuthConfig = {
@@ -119,6 +121,14 @@ type BotBuilderAuthConfig = {
   deviceId?: string;
   geoLocation?: string;
   appVersion?: string;
+};
+
+type BotBuilderFeedSession = {
+  token?: string;
+  symbols?: Array<Record<string, unknown>>;
+  selectedSymbol?: string;
+  authenticatedAt?: string;
+  symbolsFetchedAt?: string;
 };
 
 type BotBuilderWindow = Window & {
@@ -651,9 +661,14 @@ class BotBuilderApp {
   private currentLifecycle: TradeLifecycleStage[] | null = null;
   private currentLifecycleHeading = "";
   private currentLifecycleSubheading = "";
+  private currentTradeOutcome: TradeOutcome | null = null;
+  private currentTradeContractId: string | null = null;
+  private sessionStateLabel: "Disconnected" | "Connecting" | "Connected" | "Authenticated" | "Session refreshed" = "Disconnected";
+  private sessionStateNote = "Click Connect to start.";
   private readonly wsEventLog: WsEventLogEntry[] = [];
   private readonly contractTypesBySymbol: Map<string, ContractTypeRecord[]> = new Map();
   private readonly pendingContractTypeSymbols: Set<string> = new Set();
+  private lastRenderedSymbolSignature = "";
   private syncingContractMetadata = false;
 
   constructor(target: string | HTMLElement = "#app") {
@@ -668,6 +683,7 @@ class BotBuilderApp {
     this.initBlockly();
     this.bindUi();
     this.bindTradingFeed();
+    this.restoreFeedSession();
     this.seedWorkspace(true);
     this.refreshAllPanels();
 
@@ -691,7 +707,10 @@ class BotBuilderApp {
               </select>
             </label>
           </div>
-          <div class="bb-topbar-status" id="bb-topbar-status">Click Connect to start.</div>
+          <div class="bb-topbar-status" id="bb-topbar-status">
+            <span class="bb-topbar-status-label">Disconnected</span>
+            <span class="bb-topbar-status-note">Click Connect to start.</span>
+          </div>
           <div class="bb-topbar-actions">
             <button class="bb-btn bb-btn-primary" data-action="connect">Connect</button>
             <button class="bb-btn bb-btn-success" data-action="run">Run</button>
@@ -956,6 +975,7 @@ class BotBuilderApp {
           this.subscribedSymbol = nextSymbol;
         }
       }
+      this.persistFeedSession({ selectedSymbol: nextSymbol });
       void this.requestContractTypesForSymbol(nextSymbol);
       this.syncMarketDropdowns();
       this.updateFeedStatus(`Selected ${marketSelect.value}`);
@@ -987,6 +1007,7 @@ class BotBuilderApp {
   private bindTradingFeed(): void {
     const handleConnected = () => {
       this.appendWsEventLog("connected", { status: "connected" });
+      this.setSessionStatus("Connected", "WebSocket connected. Authenticating and loading symbols...");
       this.refreshConnectionStatus();
     };
     const handleDisconnected = (info?: { code?: number; reason?: string; wasClean?: boolean }) => {
@@ -1001,12 +1022,18 @@ class BotBuilderApp {
       } else {
         this.updateFeedStatus(`Connection closed${code}`.trim());
       }
+      this.setSessionStatus("Disconnected", reason ? `Connection closed${code}: ${reason}` : `Connection closed${code}`.trim());
       this.refreshConnectionStatus();
     };
     const handleAuthenticated = (data: { user_id?: number; is_demo?: boolean }) => {
       this.feedAuthenticated = true;
       const accountType = data.is_demo ? "Demo" : "Real";
       this.appendWsEventLog("authenticated", data);
+      this.persistFeedSession({
+        token: wsService.getAuthToken() ?? this.getStoredAuthToken() ?? undefined,
+        authenticatedAt: new Date().toISOString(),
+      });
+      this.setSessionStatus("Authenticated", `Authenticated as ${accountType} user ${data.user_id ?? ""}`.trim());
       this.refreshConnectionStatus();
       this.updateFeedStatus(`Authenticated as ${accountType} user ${data.user_id ?? ""}`.trim());
       wsService.requestSymbols();
@@ -1014,9 +1041,18 @@ class BotBuilderApp {
     const handleSymbols = (symbols: Array<Record<string, unknown>>) => {
       this.feedSymbols = Array.isArray(symbols) ? symbols.filter(Boolean) : [];
       this.appendWsEventLog("symbols", symbols);
+      this.persistFeedSession({
+        symbols: this.feedSymbols,
+        symbolsFetchedAt: new Date().toISOString(),
+        selectedSymbol: this.getSelectedMarketSymbol(),
+      });
       this.renderSymbolOptions(this.feedSymbols);
       this.syncSymbolDropdowns();
-      this.updateFeedStatus(`Loaded ${this.feedSymbols.length} symbols`);
+      if (this.currentTradeOutcome === null && this.currentLifecycle) {
+        this.updateFeedStatus(`Trade running. Loaded ${this.feedSymbols.length} symbols.`);
+      } else if (this.currentTradeOutcome === null) {
+        this.updateFeedStatus(`Loaded ${this.feedSymbols.length} symbols`);
+      }
       const selectedSymbol = this.getSelectedMarketSymbol();
       if (selectedSymbol) {
         void this.requestContractTypesForSymbol(selectedSymbol);
@@ -1027,11 +1063,16 @@ class BotBuilderApp {
       this.handleContractTypesPayload(payload);
     };
     const handleTick = (tick: Record<string, unknown>) => {
+      if (this.currentTradeOutcome !== null) return;
       this.latestTick = tick;
       this.appendWsEventLog("tick", tick);
     };
     const handleOrder = (message: Record<string, unknown>) => {
       this.appendWsEventLog("order", message);
+      this.applyLifecycleEvent("order", message);
+    };
+    const handleContractCreated = (message: Record<string, unknown>) => {
+      this.appendWsEventLog("contract_created", message);
       this.applyLifecycleEvent("order", message);
     };
     const handleContractActivated = (message: Record<string, unknown>) => {
@@ -1041,6 +1082,14 @@ class BotBuilderApp {
     const handleContractSettled = (message: Record<string, unknown>) => {
       this.appendWsEventLog("contract_settled", message);
       this.applyLifecycleEvent("expiry", message);
+    };
+    const handleContractDetail = (message: Record<string, unknown>) => {
+      this.appendWsEventLog("contract_detail", message);
+      this.applyFinalTradeOutcomeFromPayload(message);
+    };
+    const handleContractHistory = (message: Record<string, unknown>) => {
+      this.appendWsEventLog("contract_history", message);
+      this.applyFinalTradeOutcomeFromPayload(message);
     };
     const handleError = (error: unknown) => {
       const message = error instanceof Error ? error.message : typeof error === "string" ? error : "WebSocket error";
@@ -1055,8 +1104,11 @@ class BotBuilderApp {
     wsService.on("contract_types", handleContractTypes);
     wsService.on("tick", handleTick);
     wsService.on("order", handleOrder);
+    wsService.on("contract_created", handleContractCreated);
     wsService.on("contract_activated", handleContractActivated);
     wsService.on("contract_settled", handleContractSettled);
+    wsService.on("contract_detail", handleContractDetail);
+    wsService.on("contract_history", handleContractHistory);
     wsService.on("error", handleError);
 
     this.listeners.push(() => wsService.off("connected", handleConnected));
@@ -1066,24 +1118,39 @@ class BotBuilderApp {
     this.listeners.push(() => wsService.off("contract_types", handleContractTypes));
     this.listeners.push(() => wsService.off("tick", handleTick));
     this.listeners.push(() => wsService.off("order", handleOrder));
+    this.listeners.push(() => wsService.off("contract_created", handleContractCreated));
     this.listeners.push(() => wsService.off("contract_activated", handleContractActivated));
     this.listeners.push(() => wsService.off("contract_settled", handleContractSettled));
+    this.listeners.push(() => wsService.off("contract_detail", handleContractDetail));
+    this.listeners.push(() => wsService.off("contract_history", handleContractHistory));
     this.listeners.push(() => wsService.off("error", handleError));
   }
 
   private async connectFeed(): Promise<void> {
     try {
-      this.updateFeedStatus("Connecting to the demo server...");
+      this.setSessionStatus("Connecting", "Connecting to the demo server...");
       const token = await this.resolveAuthToken();
-      if (wsService.isAuthenticated()) {
+      const activeToken = wsService.getAuthToken()?.trim() ?? "";
+      const tokenMatchesActive = activeToken.length > 0 && activeToken === token.trim();
+
+      if (wsService.isAuthenticated() && tokenMatchesActive) {
+        this.persistFeedSession({
+          token: activeToken,
+          authenticatedAt: new Date().toISOString(),
+        });
+        this.setSessionStatus("Authenticated", "Session already authenticated. Refreshing symbols.");
         wsService.requestSymbols();
-        this.refreshConnectionStatus();
-        this.updateFeedStatus("Already authenticated. Loading live symbols...");
         return;
       }
+
       await this.authenticateWithToken(token);
+      this.persistFeedSession({
+        token,
+        authenticatedAt: new Date().toISOString(),
+      });
+      this.setSessionStatus("Authenticated", "Authenticated and ready to load live symbols.");
       this.refreshConnectionStatus();
-      this.updateFeedStatus("Authenticated and ready to load live symbols.");
+      wsService.requestSymbols();
     } catch (error) {
       const message = this.extractErrorMessage(error, "Unable to start feed connection");
       this.updateFeedStatus(message);
@@ -1114,7 +1181,20 @@ class BotBuilderApp {
 
   private getAuthBootstrapConfig(): BotBuilderAuthConfig | null {
     const runtimeWindow = this.getRuntimeWindow();
-    const injected = runtimeWindow.__BOT_BUILDER_AUTH__ ?? {};
+    const injectedScript = document.querySelector<HTMLScriptElement>("#bb-auth-bootstrap");
+    let injected: Partial<BotBuilderAuthConfig> = runtimeWindow.__BOT_BUILDER_AUTH__ ?? {};
+
+    if ((!injected || Object.keys(injected).length === 0) && injectedScript?.textContent?.trim()) {
+      try {
+        const parsed = JSON.parse(injectedScript.textContent) as Partial<BotBuilderAuthConfig>;
+        if (parsed && typeof parsed === "object") {
+          injected = parsed;
+        }
+      } catch (error) {
+        console.error("Failed to parse auth bootstrap script:", error);
+      }
+    }
+
     const token = injected.token?.trim() ?? "";
     const identifier = injected.identifier?.trim() ?? "";
     const password = injected.password?.trim() ?? "";
@@ -1141,6 +1221,68 @@ class BotBuilderApp {
     if (!nextToken) return;
     window.localStorage.setItem(AUTH_STORAGE_KEY, nextToken);
     this.getRuntimeWindow().__BOT_BUILDER_AUTH_TOKEN__ = nextToken;
+  }
+
+  private readFeedSession(): BotBuilderFeedSession {
+    try {
+      const raw = window.sessionStorage.getItem(FEED_SESSION_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as BotBuilderFeedSession;
+      if (!parsed || typeof parsed !== "object") return {};
+      return {
+        token: typeof parsed.token === "string" ? parsed.token.trim() : undefined,
+        symbols: Array.isArray(parsed.symbols) ? parsed.symbols.filter(Boolean) as Array<Record<string, unknown>> : undefined,
+        selectedSymbol: typeof parsed.selectedSymbol === "string" ? parsed.selectedSymbol.trim() : undefined,
+        authenticatedAt: typeof parsed.authenticatedAt === "string" ? parsed.authenticatedAt : undefined,
+        symbolsFetchedAt: typeof parsed.symbolsFetchedAt === "string" ? parsed.symbolsFetchedAt : undefined,
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  private persistFeedSession(patch: Partial<BotBuilderFeedSession>): void {
+    try {
+      const current = this.readFeedSession();
+      const next: BotBuilderFeedSession = {
+        ...current,
+        ...patch,
+      };
+      if (next.token) {
+        next.token = next.token.trim();
+      }
+      if (next.selectedSymbol) {
+        next.selectedSymbol = next.selectedSymbol.trim();
+      }
+      window.sessionStorage.setItem(FEED_SESSION_STORAGE_KEY, JSON.stringify(next));
+    } catch (error) {
+      console.error("Feed session persistence error:", error);
+    }
+  }
+
+  private restoreFeedSession(): void {
+    const session = this.readFeedSession();
+    if (session.token) {
+      this.storeAuthToken(session.token);
+    }
+
+    if (Array.isArray(session.symbols) && session.symbols.length > 0) {
+      this.feedSymbols = session.symbols.filter(Boolean);
+      if (session.selectedSymbol) {
+        const marketSelect = this.root.querySelector<HTMLSelectElement>("#bb-market-select");
+        if (marketSelect) {
+          marketSelect.value = session.selectedSymbol;
+        }
+      }
+      this.renderSymbolOptions(this.feedSymbols);
+      this.syncSymbolDropdowns();
+      const selectedSymbol = session.selectedSymbol || this.getSelectedMarketSymbol();
+      if (selectedSymbol) {
+        this.setSessionStatus("Disconnected", `Session restored for ${selectedSymbol}. Click Connect to refresh symbols.`);
+      } else {
+        this.setSessionStatus("Disconnected", "Session restored. Click Connect to refresh symbols.");
+      }
+    }
   }
 
   private async bootstrapAuthToken(): Promise<string> {
@@ -1227,39 +1369,63 @@ class BotBuilderApp {
   }
 
   private async resolveAuthToken(): Promise<string> {
-    const storedToken = this.getStoredAuthToken();
-    if (storedToken) {
-      return storedToken;
-    }
-
     const injectedToken = this.getInjectedAuthToken();
     if (injectedToken) {
       return injectedToken;
+    }
+
+    const storedToken = this.getStoredAuthToken();
+    if (storedToken) {
+      return storedToken;
     }
 
     return this.bootstrapAuthToken();
   }
 
   private updateFeedStatus(message: string): void {
-    const status = this.root.querySelector<HTMLElement>("#bb-topbar-status");
+    const status = this.root.querySelector<HTMLElement>("#bb-status-caption");
     if (status) status.textContent = message;
+  }
+
+  private setSessionStatus(label: typeof this.sessionStateLabel, note: string): void {
+    this.sessionStateLabel = label;
+    this.sessionStateNote = note;
+    this.refreshConnectionStatus();
   }
 
   private refreshConnectionStatus(): void {
     const status = this.root.querySelector<HTMLElement>("#bb-topbar-status");
     if (!status) return;
-
-    const connectionState = wsService.getStatus();
-    const isAuthenticated = this.feedAuthenticated || wsService.isAuthenticated();
-    const label = !wsService.isConnected()
+    const tradeOutcomeLabel = this.currentTradeOutcome === "won"
+      ? "Trade won"
+      : this.currentTradeOutcome === "lost"
+        ? "Trade lost"
+        : null;
+    const stateLabel = tradeOutcomeLabel ?? (!wsService.isConnected()
       ? "Disconnected"
-      : connectionState === "connecting"
+      : wsService.getStatus() === "connecting"
         ? "Connecting"
-        : isAuthenticated
-          ? "Authenticated"
-          : "Connected";
+        : this.feedAuthenticated || wsService.isAuthenticated()
+          ? this.sessionStateLabel === "Session refreshed"
+            ? "Session refreshed"
+            : "Authenticated"
+          : "Connected");
+    const statusClass = tradeOutcomeLabel
+      ? this.currentTradeOutcome === "won"
+        ? "is-ready"
+        : "is-error"
+      : !wsService.isConnected()
+        ? "is-error"
+        : wsService.getStatus() === "connecting"
+          ? "is-running"
+          : this.feedAuthenticated || wsService.isAuthenticated()
+            ? "is-ready"
+            : "is-running";
 
-    status.textContent = label;
+    status.innerHTML = `
+      <span class="bb-topbar-status-label ${statusClass}">${escapeHtml(stateLabel)}</span>
+      <span class="bb-topbar-status-note">${escapeHtml(this.sessionStateNote)}</span>
+    `;
   }
 
   private appendWsEventLog(event: string, payload: unknown): void {
@@ -1300,9 +1466,9 @@ class BotBuilderApp {
     return Number.isFinite(number) ? number : null;
   }
 
-  private toTradeId(value: unknown): string | number | null {
+  private toTradeId(value: unknown): string | null {
     if (typeof value === "number") {
-      return Number.isFinite(value) ? value : null;
+      return Number.isFinite(value) ? String(value) : null;
     }
     if (typeof value === "string") {
       const trimmed = value.trim();
@@ -1380,14 +1546,14 @@ class BotBuilderApp {
     return [
       {
         key: "order",
-        title: "Order",
+        title: "Created",
         status: isProvisional ? "active" : "done",
         timeMs: orderTime,
         price: orderPrice,
         contractId,
         note: isProvisional
-          ? "Order request sent. Waiting for the websocket contract lifecycle."
-          : "Order confirmed by the websocket feed.",
+          ? "Contract creation request sent. Waiting for the websocket lifecycle."
+          : "Contract creation confirmed by the websocket feed.",
         rawPayload: orderData,
       },
       {
@@ -1440,6 +1606,8 @@ class BotBuilderApp {
 
     const contractId = this.toTradeId(message.contract_id ?? message.contractId);
     const currentContractId = this.toTradeId(this.currentLifecycle[0]?.contractId ?? this.currentLifecycle[1]?.contractId ?? this.currentLifecycle[2]?.contractId);
+    const effectiveContractId = contractId ?? currentContractId;
+
     if (contractId !== null && currentContractId !== null && String(contractId) !== String(currentContractId)) {
       return;
     }
@@ -1469,15 +1637,15 @@ class BotBuilderApp {
     const target = nextStages[stageIndex];
     target.timeMs = eventTime;
     target.price = eventPrice ?? target.price ?? null;
-    target.contractId = contractId ?? target.contractId;
+    target.contractId = effectiveContractId ?? target.contractId;
     target.rawPayload = message;
 
     if (stageKey === "order") {
       target.status = "done";
-      target.note = "Order confirmed by the websocket feed.";
+      target.note = "Contract creation confirmed by the websocket feed.";
       this.currentLifecycle = nextStages;
       this.renderTradeLifecycle(nextStages, this.currentLifecycleHeading || "Demo trade placed successfully", this.currentLifecycleSubheading || "Waiting for live websocket lifecycle events.");
-      this.updateFeedStatus(`Order confirmed${contractId !== null ? ` for contract ${String(contractId)}` : ""}.`);
+      this.updateFeedStatus(`Contract created${contractId !== null ? ` for contract ${contractId}` : ""}.`);
       return;
     }
 
@@ -1490,13 +1658,13 @@ class BotBuilderApp {
         if (message.expiry_time_epoch != null) {
           expiryStage.timeMs = this.getTickTime(this.normalizeRecord({ epoch_ms: message.expiry_time_epoch }));
         }
-        expiryStage.contractId = contractId ?? expiryStage.contractId;
+        expiryStage.contractId = effectiveContractId ?? expiryStage.contractId;
         expiryStage.status = "pending";
         expiryStage.rawPayload = message;
       }
       this.currentLifecycle = nextStages;
       this.renderTradeLifecycle(nextStages, this.currentLifecycleHeading || "Demo trade placed successfully", "The trade is now running through order, activation, and expiry.");
-      this.updateFeedStatus(`Trade activated${contractId !== null ? ` for contract ${String(contractId)}` : ""}.`);
+      this.updateFeedStatus(`Trade activated${contractId !== null ? ` for contract ${contractId}` : ""}.`);
       return;
     }
 
@@ -1509,20 +1677,187 @@ class BotBuilderApp {
         nextStages[activationIndex].rawPayload = message;
       }
       this.currentLifecycle = nextStages;
-      this.renderTradeLifecycle(nextStages, "Demo trade settled", "The server confirmed the contract expiry and settlement.");
-      this.updateFeedStatus(`Trade settled${contractId !== null ? ` for contract ${String(contractId)}` : ""}.`);
+      this.renderTradeLifecycle(nextStages, "Demo trade settled", "The server confirmed the contract expiry. Waiting for the final contract result.");
+      this.updateFeedStatus(`Trade settled${effectiveContractId !== null ? ` for contract ${effectiveContractId}` : ""}. Waiting for result...`);
+      this.stopActiveTradeFeed();
+      this.applyFinalTradeOutcomeFromPayload(message);
+      if (effectiveContractId !== null) {
+        this.currentTradeContractId = effectiveContractId;
+        void this.requestFinalTradeOutcome(effectiveContractId);
+      }
     }
+  }
+
+  private normalizeOutcomeLabel(value: unknown): TradeOutcome | null {
+    const status = safeString(value).trim().toLowerCase();
+    if (!status) return null;
+    if (["won", "win", "winner", "success", "successful"].includes(status)) return "won";
+    if (["lost", "loss", "failed", "failure", "expired_lost", "expired loss"].includes(status)) return "lost";
+    return null;
+  }
+
+  private extractOutcomeRecord(payload: Record<string, unknown>, contractId: string | null): Record<string, unknown> | null {
+    const candidates: unknown[] = [payload, payload.data, payload.message];
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+      const record = candidate as Record<string, unknown>;
+      if (Array.isArray(record.contracts)) {
+        const contracts = record.contracts.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object"));
+        const matched = contractId == null
+          ? contracts[0] ?? null
+          : contracts.find((entry) => String(entry.contract_id ?? entry.contractId ?? "") === contractId) ?? null;
+        if (matched) return matched;
+      }
+
+      const currentId = this.toTradeId(record.contract_id ?? record.contractId ?? record.id);
+      if (contractId == null || currentId == null || currentId === contractId) {
+        if (record.status || record.profit != null || record.payout != null) {
+          return record;
+        }
+      }
+    }
+    return null;
+  }
+
+  private resolveOutcomeFromRecord(record: Record<string, unknown>): TradeOutcome | null {
+    const statusOutcome = this.normalizeOutcomeLabel(record.status ?? record.result ?? record.outcome);
+    if (statusOutcome) return statusOutcome;
+
+    const profit = this.toFiniteNumber(record.profit);
+    if (profit != null) {
+      return profit > 0 ? "won" : "lost";
+    }
+
+    const payout = this.toFiniteNumber(record.payout);
+    const stake = this.toFiniteNumber(record.stake);
+    if (payout != null && stake != null) {
+      return payout > stake ? "won" : "lost";
+    }
+
+    if (record.is_won === true || record.won === true || record.win === true) return "won";
+    if (record.is_won === false || record.won === false || record.win === false) return "lost";
+    return null;
+  }
+
+  private async requestFinalTradeOutcome(contractId: string): Promise<void> {
+    try {
+      const detailWait = this.waitForWsEvent<Record<string, unknown>>("contract_detail", 8000);
+      if (wsService.requestContractDetail(contractId)) {
+        try {
+          const detailPayload = await detailWait;
+          const detailRecord = this.extractOutcomeRecord(detailPayload, contractId);
+          if (detailRecord) {
+            this.applyFinalTradeOutcome(detailRecord, contractId);
+            return;
+          }
+        } catch {
+          // Fall through to history lookup.
+        }
+      }
+
+      const historyWait = this.waitForWsEvent<Record<string, unknown>>("contract_history", 8000);
+      if (wsService.requestContractHistory(20, 0)) {
+        try {
+          const historyPayload = await historyWait;
+          const historyRecord = this.extractOutcomeRecord(historyPayload, contractId);
+          if (historyRecord) {
+            this.applyFinalTradeOutcome(historyRecord, contractId);
+          }
+        } catch {
+          // Best effort only; the lifecycle still shows settlement.
+        }
+      }
+    } catch (error) {
+      this.appendWsEventLog("final_trade_outcome_error", {
+        message: this.extractErrorMessage(error, "Failed to resolve final trade outcome"),
+      });
+    }
+  }
+
+  private applyFinalTradeOutcome(record: Record<string, unknown>, contractId: string | null = null): void {
+    const outcome = this.resolveOutcomeFromRecord(record);
+    if (!outcome) return;
+
+    this.currentTradeOutcome = outcome;
+    if (contractId !== null) {
+      this.currentTradeContractId = contractId;
+    }
+
+    const label = outcome === "won" ? "Demo trade won" : "Demo trade lost";
+    const subheading = outcome === "won"
+      ? "The server confirmed the contract expired in profit."
+      : "The server confirmed the contract expired at a loss.";
+    const statusPill = this.root.querySelector<HTMLElement>("#bb-status-pill");
+    const statusCaption = this.root.querySelector<HTMLElement>("#bb-status-caption");
+
+    if (statusPill) {
+      statusPill.className = outcome === "won" ? "bb-status-pill is-ready" : "bb-status-pill is-error";
+      statusPill.textContent = outcome === "won" ? "Trade won" : "Trade lost";
+    }
+    if (statusCaption) {
+      statusCaption.textContent = subheading;
+    }
+    if (this.currentLifecycle) {
+      this.renderTradeLifecycle(this.currentLifecycle, label, subheading);
+    }
+    this.stopActiveTradeFeed();
+    this.updateFeedStatus(`${label}${this.currentTradeContractId !== null ? ` for contract ${this.currentTradeContractId}` : ""}.`);
+  }
+
+  private applyFinalTradeOutcomeFromPayload(payload: Record<string, unknown>): void {
+    const record = this.extractOutcomeRecord(payload, this.currentTradeContractId);
+    if (record) {
+      this.applyFinalTradeOutcome(record, this.toTradeId(record.contract_id ?? record.contractId ?? record.id) ?? this.currentTradeContractId);
+      return;
+    }
+
+    if (this.resolveOutcomeFromRecord(payload)) {
+      this.applyFinalTradeOutcome(
+        payload,
+        this.toTradeId(payload.contract_id ?? payload.contractId ?? payload.id) ?? this.currentTradeContractId,
+      );
+    }
+  }
+
+  private getOutcomeSummary(): { label: string; className: string } {
+    if (this.currentTradeOutcome === "won") {
+      return { label: "Won", className: "is-ready" };
+    }
+    if (this.currentTradeOutcome === "lost") {
+      return { label: "Lost", className: "is-error" };
+    }
+    return { label: "Running", className: "is-running" };
   }
 
   private renderTradeLifecycle(stages: TradeLifecycleStage[], heading: string, subheading: string): void {
     const resultsEl = this.root.querySelector<HTMLElement>("#bb-results");
     if (!resultsEl) return;
+    const summaryContractId = this.currentTradeContractId ?? stages.find((stage) => stage.contractId != null)?.contractId ?? "pending";
+    const summaryOutcome = this.getOutcomeSummary();
+    const summaryLifecycle =
+      this.currentTradeOutcome == null
+        ? "In progress"
+        : this.currentTradeOutcome === "won"
+          ? "Settled"
+          : "Settled";
+    const isSettled = this.currentTradeOutcome === "won" || this.currentTradeOutcome === "lost";
+    const finalBanner = isSettled
+      ? `
+        <div class="bb-final-banner ${summaryOutcome.className}">
+          <div class="bb-final-banner-label">Settled: ${escapeHtml(summaryOutcome.label)}</div>
+          <div class="bb-final-banner-meta">
+            <span>Contract ID: ${escapeHtml(String(summaryContractId))}</span>
+            <span>Duration complete</span>
+          </div>
+        </div>
+      `
+      : "";
 
     const rows = stages
       .map((stage) => {
         const badgeClass = stage.status === "done" ? "is-ready" : stage.status === "active" ? "is-running" : "is-pending";
         const priceText = stage.price == null ? "n/a" : String(stage.price);
-        const contractText = stage.contractId == null ? "n/a" : String(stage.contractId);
+        const contractText = stage.contractId == null ? "n/a" : stage.contractId;
         return `
           <div class="bb-lifecycle-row">
             <div class="bb-lifecycle-badge ${badgeClass}">${escapeHtml(stage.title)}</div>
@@ -1558,8 +1893,32 @@ class BotBuilderApp {
       })
       .join("");
 
+    const summaryCards = isSettled
+      ? ""
+      : `
+        <div class="bb-trade-summary">
+          <div class="bb-trade-summary-item">
+            <span>Contract ID</span>
+            <strong>${escapeHtml(String(summaryContractId))}</strong>
+          </div>
+          <div class="bb-trade-summary-item">
+            <span>Lifecycle</span>
+            <strong>${escapeHtml(summaryLifecycle)}</strong>
+          </div>
+          <div class="bb-trade-summary-item">
+            <span>Outcome</span>
+            <strong class="bb-trade-summary-badge ${summaryOutcome.className}">${escapeHtml(summaryOutcome.label)}</strong>
+          </div>
+        </div>
+      `;
+
     resultsEl.innerHTML = `
-      <div class="bb-result-ok">${escapeHtml(heading)}</div>
+      ${finalBanner}
+      ${summaryCards}
+      <div class="bb-result-header">
+        <div class="bb-result-ok">${escapeHtml(heading)}</div>
+        <div class="bb-result-outcome ${summaryOutcome.className}">${escapeHtml(summaryOutcome.label)}</div>
+      </div>
       <div class="bb-result-caption">${escapeHtml(subheading)}</div>
       <div class="bb-lifecycle-list">${rows}</div>
       <div class="bb-event-log">
@@ -1574,36 +1933,44 @@ class BotBuilderApp {
     if (!select) return;
 
     const currentValue = select.value.trim();
-    const normalized = symbols
-      .map((item) => {
-        const value = safeString(item.name ?? item.symbol ?? "");
-        if (!value) return null;
-        const label = safeString(item.display_name ?? item.name ?? item.symbol ?? value) || value;
-        return { value, label };
-      })
-      .filter((item): item is { value: string; label: string } => Boolean(item));
+    const normalized = this.buildSymbolOptions(symbols);
 
     const options = normalized.length
       ? normalized
       : [{ value: "__loading_symbols__", label: "Waiting for symbols from server..." }];
+    const signature = options.map((option) => `${option.value}::${option.label}`).join("|");
+
+    const nextValue = options.some((option) => option.value === currentValue) ? currentValue : options[0]?.value ?? "__loading_symbols__";
+    if (signature === this.lastRenderedSymbolSignature && select.value === nextValue) {
+      return;
+    }
 
     select.innerHTML = options
       .map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`)
       .join("");
-
-    const nextValue = options.some((option) => option.value === currentValue) ? currentValue : options[0]?.value ?? "__loading_symbols__";
     select.value = nextValue;
-
-    const marketBlock = this.findBlockByType("market_symbol");
-    if (marketBlock) {
-      marketBlock.setFieldValue(nextValue, "SYMBOL");
-    }
+    this.lastRenderedSymbolSignature = signature;
 
     const activeSymbol = this.getSelectedMarketSymbol();
     if (activeSymbol && !activeSymbol.startsWith("__loading")) {
       void this.requestContractTypesForSymbol(activeSymbol);
     }
     this.syncMarketDropdowns();
+  }
+
+  private buildSymbolOptions(symbols: Array<Record<string, unknown>>): Array<{ value: string; label: string }> {
+    const options: Array<{ value: string; label: string }> = [];
+    const seen = new Set<string>();
+
+    for (const item of symbols) {
+      const value = safeString(item.name ?? item.symbol ?? "");
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      const label = safeString(item.display_name ?? item.name ?? item.symbol ?? value) || value;
+      options.push({ value, label });
+    }
+
+    return options;
   }
 
   private getSelectedMarketSymbol(): string {
@@ -1876,8 +2243,14 @@ class BotBuilderApp {
           )
         : [];
 
-      const contractForCurrentType = records.find((record) => record.contract_type === currentContract);
-      const preferredCategory = contractForCurrentType?.contract_category || currentCategory;
+      const contractForCurrentType = records.find((record) => record.contract_type === currentContract) ?? null;
+      const contractForUpType = records.find((record) => record.contract_type === "UP") ?? null;
+      const preferredCategory =
+        contractForCurrentType?.contract_category ||
+        contractForUpType?.contract_category ||
+        records[0]?.contract_category ||
+        currentCategory ||
+        "PATH_INDEPENDENT";
       const nextCategory = this.updateDropdownFieldOptions(
         marketSettingsBlock ?? categoryBlock,
         "CONTRACT_CATEGORY",
@@ -1915,6 +2288,7 @@ class BotBuilderApp {
       const contractOptionsValues = new Set(contractOptions.map((option) => option.value));
       const preferredContract =
         (contractRecords.find((record) => record.contract_type === currentContract)?.contract_type ?? "") ||
+        (contractOptionSource.find((record) => record.contract_type === "UP")?.contract_type ?? "") ||
         (contractOptionsValues.has(this.selectedContractType) ? this.selectedContractType : "") ||
         currentContract;
 
@@ -1942,19 +2316,22 @@ class BotBuilderApp {
     }
   }
 
+  private stopActiveTradeFeed(): void {
+    if (!this.subscribedSymbol) return;
+    wsService.unsubscribe(this.subscribedSymbol);
+    this.subscribedSymbol = null;
+  }
+
   private syncSymbolDropdowns(): void {
     if (!this.workspace || this.syncingContractMetadata) return;
 
     this.syncingContractMetadata = true;
     try {
-      const symbolOptions = this.feedSymbols
-        .map((item) => {
-          const value = safeString(item.name ?? item.symbol ?? "");
-          if (!value) return null;
-          const label = safeString(item.display_name ?? item.name ?? item.symbol ?? value) || value;
-          return { label, value };
-        })
-        .filter((item): item is { label: string; value: string } => Boolean(item));
+      const activeSymbol =
+        this.root.querySelector<HTMLSelectElement>("#bb-market-select")?.value.trim() ||
+        this.getSelectedMarketSymbol() ||
+        DEFAULT_SYMBOL;
+      const symbolOptions = this.buildSymbolOptions(this.feedSymbols);
 
       const blocks = this.workspace.getAllBlocks(false).filter((block: any) => {
         return typeof block?.getField === "function" && typeof block?.getFieldValue === "function" && Boolean(block.getField("SYMBOL"));
@@ -1962,13 +2339,13 @@ class BotBuilderApp {
 
       for (const block of blocks) {
         const currentValue = safeString(block.getFieldValue("SYMBOL"));
-        const preferred = symbolOptions.find((option) => option.value === currentValue) ?? null;
+        const preferred = symbolOptions.find((option) => option.value === activeSymbol) ?? symbolOptions.find((option) => option.value === currentValue) ?? null;
         this.updateDropdownFieldOptions(
           block,
           "SYMBOL",
           symbolOptions,
-          preferred?.value || currentValue || null,
-          preferred?.label || currentValue || null,
+          preferred?.value || activeSymbol,
+          preferred?.label || activeSymbol,
         );
       }
     } finally {
@@ -2070,7 +2447,6 @@ class BotBuilderApp {
 
   private async runLiveTrade(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     await this.ensureAuthenticated();
-
     const symbol = String(payload.symbol ?? DEFAULT_SYMBOL).trim() || DEFAULT_SYMBOL;
     await this.ensureSymbolSubscription(symbol);
 
@@ -2088,25 +2464,12 @@ class BotBuilderApp {
       digit_high: payload.digit_high as number | undefined,
     };
 
-    const orderWait = this.waitForWsEvent<Record<string, unknown>>("order");
     const orderOk = wsService.placeOrder(orderParams);
-
     if (!orderOk) {
       throw new Error("Failed to place order");
     }
 
     this.appendWsEventLog("order_sent", orderParams);
-    void orderWait
-      .then((order) => {
-        const orderData = (order.data as Record<string, unknown> | undefined) ?? order;
-        this.appendWsEventLog("order_acknowledged", orderData);
-      })
-      .catch((error) => {
-        this.appendWsEventLog("order_wait_error", {
-          message: this.extractErrorMessage(error, "Order acknowledgement wait failed"),
-        });
-      });
-
     return {
       request: "order_buy",
       type: "order_buy",
@@ -2917,7 +3280,7 @@ class BotBuilderApp {
     }
     if (resultsEl) {
       resultsEl.innerHTML = `
-        <div class="bb-result-ok">Connecting to demo account...</div>
+        <div class="bb-result-ok">Starting contract lifecycle...</div>
         <div class="bb-result-meta">
           <div><strong>Symbol</strong><span>${safeString(payload?.symbol ?? DEFAULT_SYMBOL)}</span></div>
           <div><strong>Contract</strong><span>${safeString(payload?.contract_type ?? "UP")}</span></div>
@@ -2934,10 +3297,13 @@ class BotBuilderApp {
     });
 
     try {
+      this.currentTradeOutcome = null;
+      this.currentTradeContractId = null;
       const orderData = await this.runLiveTrade(payload);
+      this.currentTradeContractId = this.toTradeId(orderData.contract_id ?? orderData.contractId) ?? null;
       const lifecycle = this.buildTradeLifecycle(payload, orderData);
       this.setCurrentLifecycle(lifecycle, "Demo trade request sent", "Waiting for websocket order, activation, and settlement events.");
-      const contractId = orderData.contract_id ?? orderData.contractId ?? "pending";
+      const contractId = this.currentTradeContractId ?? "pending";
       const payout = orderData.payout ?? orderData.profit ?? "n/a";
       const sessionType = orderData.session_type ?? "demo";
 
@@ -2948,7 +3314,7 @@ class BotBuilderApp {
       if (statusCaption) {
         statusCaption.textContent = "Order request sent. Waiting for activation and settlement from the feed.";
       }
-      this.updateFeedStatus(`Trade request sent on ${String(sessionType)} account #${String(contractId)}. Payout ${String(payout)}.`);
+      this.updateFeedStatus(`Trade request sent on ${String(sessionType)} account #${contractId}. Payout ${String(payout)}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Trade execution failed";
       if (statusPill) {

@@ -58,6 +58,7 @@ export class WebSocketService {
       this.authToken = token.trim() || null;
     }
     this.authenticateOnOpen = authenticateOnOpen;
+    this.authenticated = false;
     if (this.ws && this.status === CONNECTION_STATUS.CONNECTED) return;
 
     this.status = CONNECTION_STATUS.CONNECTING as ConnectionStatus;
@@ -72,7 +73,6 @@ export class WebSocketService {
         this.emit('statusChange', this.status);
         this.emit('connected');
         this.send({ request: 'ping' });
-        this.requestSymbols();
         if (this.authenticateOnOpen && this.authToken) {
           this.authenticate(this.authToken);
         }
@@ -96,6 +96,7 @@ export class WebSocketService {
 
       this.ws.onclose = (event: CloseEvent) => {
         this.status = CONNECTION_STATUS.DISCONNECTED as ConnectionStatus;
+        this.authenticated = false;
         this.emit('statusChange', this.status);
         this.emit('disconnected', {
           code: event.code,
@@ -209,11 +210,20 @@ export class WebSocketService {
       return;
     }
     if (eventType === 'order_buy' || eventType === 'contract_created' || requestType === 'order_buy' || requestType === 'contract_created') {
+      this.emit('contract_created', payload);
       this.emit('order', payload);
       return;
     }
     if (eventType === 'contract_activated' || requestType === 'contract_activated') {
       this.emit('contract_activated', payload);
+      return;
+    }
+    if (eventType === 'contract_detail' || requestType === 'contract_detail') {
+      this.emit('contract_detail', payload);
+      return;
+    }
+    if (eventType === 'contract_history' || requestType === 'contract_history') {
+      this.emit('contract_history', payload);
       return;
     }
     if (eventType === 'contract_settled' || eventType === 'contract_settlement' || requestType === 'contract_settled' || requestType === 'contract_settlement') {
@@ -245,6 +255,14 @@ export class WebSocketService {
 
   placeOrder(params: OrderParams): boolean {
     return this.send({ request: 'order_buy', ...params });
+  }
+
+  requestContractDetail(contractId: string | number): boolean {
+    return this.send({ request: 'contract_detail', contract_id: contractId });
+  }
+
+  requestContractHistory(limit = 20, offset = 0): boolean {
+    return this.send({ request: 'contract_history', limit, offset });
   }
 
   requestProposal(params: OrderParams): boolean {
