@@ -90,6 +90,39 @@ type ContractTypeRecord = {
   description?: string;
 };
 
+type DurationLimitRecord = {
+  min: number;
+  max: number;
+};
+
+type ProposalDefaultsRecord = {
+  contract_type: string;
+  allowed_units: string[];
+  default_duration: number;
+  default_duration_unit: string;
+  default_stake: number;
+  duration_limits: Record<string, DurationLimitRecord>;
+  min_stake: number;
+  max_stake: number;
+  barrier_default?: number;
+  barrier_direction?: string;
+  barrier_max?: number;
+  barrier_min?: number;
+  barrier_low_default?: number;
+  barrier_high_default?: number;
+  digit_target_min?: number;
+  digit_target_max?: number;
+  default_digit_target?: number;
+  default_digit_low?: number;
+  default_digit_high?: number;
+  digit_low_min?: number;
+  digit_low_max?: number;
+  digit_high_min?: number;
+  digit_high_max?: number;
+  hint?: string;
+  spot?: number;
+};
+
 const SECTION_INPUT_NAMES: Record<SectionId, string> = {
     market: "MARKET",
   execution: "EXECUTION",
@@ -353,6 +386,19 @@ function toSectionSnapshot(sectionId: SectionId, blocks: SerializedBlock[]): Sec
   };
 }
 
+function getContractCategoryDisplayFromType(contractType: string): string {
+  const normalizedType = safeString(contractType).trim().toUpperCase();
+  if (!normalizedType) return "";
+  if (["UP", "DOWN"].includes(normalizedType)) return "Up/Down";
+  if (["HIGH", "LOW"].includes(normalizedType)) return "High/Low";
+  if (["KNOCK_IN", "KNOCK_OUT"].includes(normalizedType)) return "Knock In/Out";
+  if (["ENDS_BETWEEN", "ENDS_OUTSIDE"].includes(normalizedType)) return "Ends Between/Outside";
+  if (["STAYS_IN", "STAYS_OUT"].includes(normalizedType)) return "Stays In/Out";
+  if (["MATCHES", "DIFFERS"].includes(normalizedType)) return "Matches/Differs";
+  if (["OVER", "UNDER"].includes(normalizedType)) return "Over/Under";
+  return normalizedType;
+}
+
 function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unknown> {
   const result: Record<string, unknown> = {};
 
@@ -361,6 +407,8 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
   const marketContract = firstBlockByType(blocks, "market_contract");
   const marketSettings = firstBlockByType(blocks, "market_settings");
   const marketBarrier = firstBlockByType(blocks, "market_barrier");
+  const marketBarrierLow = firstBlockByType(blocks, "market_barrier_low");
+  const marketBarrierHigh = firstBlockByType(blocks, "market_barrier_high");
   const marketDigits = firstBlockByType(blocks, "market_digits");
   const marketRange = firstBlockByType(blocks, "market_range");
 
@@ -371,22 +419,33 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
       ...(marketCategory?.values ?? {}),
       ...(marketContract?.values ?? {}),
       ...(marketBarrier?.values ?? {}),
+      ...(marketBarrierLow?.values ?? {}),
+      ...(marketBarrierHigh?.values ?? {}),
       ...(marketDigits?.values ?? {}),
       ...(marketRange?.values ?? {}),
     };
+    const rangeLow = values.RANGE_LOW ?? values.DIGIT_LOW;
+    const rangeHigh = values.RANGE_HIGH ?? values.DIGIT_HIGH;
+    const barrierLow = values.BARRIER_LOW;
+    const barrierHigh = values.BARRIER_HIGH;
+    const contractType = safeString(values.CONTRACT_TYPE ?? "UP");
+    const rawCategory = safeString(values.CONTRACT_CATEGORY ?? "");
+    const normalizedCategory =
+      rawCategory && rawCategory !== "PATH_INDEPENDENT"
+        ? rawCategory
+        : getContractCategoryDisplayFromType(contractType);
 
     result.market = {
       symbol: safeString(values.SYMBOL ?? DEFAULT_SYMBOL),
-      category: safeString(values.CONTRACT_CATEGORY ?? "PATH_INDEPENDENT"),
-      contractType: safeString(values.CONTRACT_TYPE ?? "UP"),
-      barrier: values.BARRIER_ENABLED === false ? undefined : asNumber(values.BARRIER_VALUE ?? 2.5, 2.5),
-      barrierDirection: safeString(values.BARRIER_DIRECTION ?? "above"),
-      barrierMode: safeString(values.BARRIER_MODE ?? "single"),
-      digitTarget: values.DIGIT_LOCK === false ? undefined : asNumber(values.DIGIT_TARGET ?? 5, 5),
+      category: normalizedCategory || rawCategory || "Up/Down",
+      contractType,
+      barrier: asNumber(values.BARRIER_VALUE ?? 0.199, 0.199),
+      barrierLow: typeof barrierLow === "number" ? asNumber(barrierLow, barrierLow) : undefined,
+      barrierHigh: typeof barrierHigh === "number" ? asNumber(barrierHigh, barrierHigh) : undefined,
+      rangeLow: asNumber(rangeLow ?? 3, 3),
+      rangeHigh: asNumber(rangeHigh ?? 6, 6),
+      digitTarget: asNumber(values.DIGIT_TARGET ?? 5, 5),
       digitOperator: safeString(values.DIGIT_OPERATOR ?? "MATCHES"),
-      digitLow: asNumber(values.DIGIT_LOW ?? 3, 3),
-      digitHigh: asNumber(values.DIGIT_HIGH ?? 6, 6),
-      digitInclusive: asBoolean(values.DIGIT_INCLUSIVE ?? true),
     };
   }
 
@@ -591,7 +650,7 @@ function createApiPayload(strategy: StrategySnapshot): Record<string, unknown> |
 
   const hasBarrierContract = ["HIGH", "LOW", "KNOCK_IN", "KNOCK_OUT"].includes(contractType);
   const hasDoubleBarrierContract = ["ENDS_BETWEEN", "ENDS_OUTSIDE", "STAYS_IN", "STAYS_OUT"].includes(contractType);
-  const hasDigitTargetContract = ["MATCHES", "DIFFERS", "OVER", "UNDER"].includes(contractType);
+  const hasDigitTargetContract = ["MATCHES", "DIFFERS", "OVER", "UNDER", "EVEN", "ODD", "PRIME", "NON_PRIME"].includes(contractType);
   const hasDigitRangeContract = ["RANGE_IN", "RANGE_OUT"].includes(contractType);
 
   if (hasBarrierContract && typeof market.barrier === "number") {
@@ -599,9 +658,8 @@ function createApiPayload(strategy: StrategySnapshot): Record<string, unknown> |
   }
 
   if (hasDoubleBarrierContract) {
-    const barrierValue = typeof market.barrier === "number" ? Math.abs(market.barrier) : 0;
-    payload.barrier_low = typeof market.barrierLow === "number" ? market.barrierLow : -Math.abs(barrierValue);
-    payload.barrier_high = typeof market.barrierHigh === "number" ? market.barrierHigh : Math.abs(barrierValue);
+    payload.barrier_low = typeof market.barrierLow === "number" ? market.barrierLow : typeof market.rangeLow === "number" ? market.rangeLow : undefined;
+    payload.barrier_high = typeof market.barrierHigh === "number" ? market.barrierHigh : typeof market.rangeHigh === "number" ? market.rangeHigh : undefined;
   }
 
   if (hasDigitTargetContract && typeof market.digitTarget === "number") {
@@ -609,11 +667,11 @@ function createApiPayload(strategy: StrategySnapshot): Record<string, unknown> |
   }
 
   if (hasDigitRangeContract) {
-    if (typeof market.digitLow === "number") {
-      payload.digit_low = market.digitLow;
+    if (typeof market.rangeLow === "number") {
+      payload.digit_low = market.rangeLow;
     }
-    if (typeof market.digitHigh === "number") {
-      payload.digit_high = market.digitHigh;
+    if (typeof market.rangeHigh === "number") {
+      payload.digit_high = market.rangeHigh;
     }
   }
 
@@ -649,7 +707,7 @@ class BotBuilderApp {
   private modalState: ModalState = { categoryId: null, templateType: null };
   private selectedCategoryId: string = DEFAULT_CATEGORY;
   private expandedCategoryIds: Set<string> = new Set([DEFAULT_CATEGORY]);
-  private selectedContractCategory: string = "PATH_INDEPENDENT";
+  private selectedContractCategory: string = "__loading_contract_categories__";
   private selectedContractType: string = "UP";
   private strategyXml: string | null = null;
   private lastSnapshot: StrategySnapshot | null = null;
@@ -667,7 +725,9 @@ class BotBuilderApp {
   private sessionStateNote = "Click Connect to start.";
   private readonly wsEventLog: WsEventLogEntry[] = [];
   private readonly contractTypesBySymbol: Map<string, ContractTypeRecord[]> = new Map();
+  private readonly proposalDefaultsBySymbol: Map<string, Map<string, ProposalDefaultsRecord>> = new Map();
   private readonly pendingContractTypeSymbols: Set<string> = new Set();
+  private readonly pendingProposalDefaultsSymbols: Set<string> = new Set();
   private lastRenderedSymbolSignature = "";
   private syncingContractMetadata = false;
 
@@ -881,10 +941,21 @@ class BotBuilderApp {
       }
     });
 
-    this.workspace.addChangeListener(() => {
+    this.workspace.addChangeListener((event: any) => {
+      const eventType = safeString(event?.type ?? "");
+      const fieldName = safeString(event?.name ?? "");
+      const isRelevantFieldChange =
+        eventType === "field_change" &&
+        ["CONTRACT_TYPE", "CONTRACT_CATEGORY", "SYMBOL"].includes(fieldName);
+
       if (!this.syncingContractMetadata) {
-        this.syncMarketDropdowns();
-        this.syncExecutionHelperVisibility();
+        if (isRelevantFieldChange) {
+          this.syncMarketDropdowns();
+          this.syncExecutionHelperVisibility();
+        } else {
+          this.syncMarketDropdowns();
+          this.syncExecutionHelperVisibility();
+        }
       }
       this.refreshAllPanels();
     });
@@ -1014,6 +1085,7 @@ class BotBuilderApp {
       this.feedAuthenticated = false;
       this.subscribedSymbol = null;
       this.pendingContractTypeSymbols.clear();
+      this.pendingProposalDefaultsSymbols.clear();
       this.appendWsEventLog("disconnected", info ?? { status: "disconnected" });
       const reason = info?.reason?.trim();
       const code = info?.code != null ? ` (${info.code})` : "";
@@ -1037,6 +1109,10 @@ class BotBuilderApp {
       this.refreshConnectionStatus();
       this.updateFeedStatus(`Authenticated as ${accountType} user ${data.user_id ?? ""}`.trim());
       wsService.requestSymbols();
+      const selectedSymbol = this.getSelectedMarketSymbol();
+      if (selectedSymbol) {
+        this.requestProposalDefaultsForSymbol(selectedSymbol);
+      }
     };
     const handleSymbols = (symbols: Array<Record<string, unknown>>) => {
       this.feedSymbols = Array.isArray(symbols) ? symbols.filter(Boolean) : [];
@@ -1056,11 +1132,16 @@ class BotBuilderApp {
       const selectedSymbol = this.getSelectedMarketSymbol();
       if (selectedSymbol) {
         void this.requestContractTypesForSymbol(selectedSymbol);
+        this.requestProposalDefaultsForSymbol(selectedSymbol);
       }
     };
     const handleContractTypes = (payload: Record<string, unknown>) => {
       this.appendWsEventLog("contract_types", payload);
       this.handleContractTypesPayload(payload);
+    };
+    const handleProposalDefaults = (payload: Record<string, unknown>) => {
+      this.appendWsEventLog("proposal_defaults", payload);
+      this.handleProposalDefaultsPayload(payload);
     };
     const handleTick = (tick: Record<string, unknown>) => {
       if (this.currentTradeOutcome !== null) return;
@@ -1102,6 +1183,7 @@ class BotBuilderApp {
     wsService.on("authenticated", handleAuthenticated);
     wsService.on("symbols", handleSymbols);
     wsService.on("contract_types", handleContractTypes);
+    wsService.on("proposal_defaults", handleProposalDefaults);
     wsService.on("tick", handleTick);
     wsService.on("order", handleOrder);
     wsService.on("contract_created", handleContractCreated);
@@ -1116,6 +1198,7 @@ class BotBuilderApp {
     this.listeners.push(() => wsService.off("authenticated", handleAuthenticated));
     this.listeners.push(() => wsService.off("symbols", handleSymbols));
     this.listeners.push(() => wsService.off("contract_types", handleContractTypes));
+    this.listeners.push(() => wsService.off("proposal_defaults", handleProposalDefaults));
     this.listeners.push(() => wsService.off("tick", handleTick));
     this.listeners.push(() => wsService.off("order", handleOrder));
     this.listeners.push(() => wsService.off("contract_created", handleContractCreated));
@@ -2001,55 +2084,150 @@ class BotBuilderApp {
       getBlockFieldValue(marketSettingsBlock, "CONTRACT_CATEGORY") ||
       getBlockFieldValue(marketCategoryBlock, "CONTRACT_CATEGORY") ||
       this.selectedContractCategory ||
-      "PATH_INDEPENDENT"
+      "__loading_contract_categories__"
     );
   }
 
+  private resolveContractCategoryRecord(records: ContractTypeRecord[], selectedCategory: string): ContractTypeRecord | null {
+    const normalizedCategory = safeString(selectedCategory);
+    if (!normalizedCategory) return null;
+    return (
+      records.find((record) => record.contract_category_display === normalizedCategory) ??
+      records.find((record) => record.contract_category === normalizedCategory) ??
+      null
+    );
+  }
+
+  private getContractCategoryDisplay(record: ContractTypeRecord | null): string {
+    return safeString(record?.contract_category_display ?? record?.contract_category ?? "");
+  }
+
   private getSelectedContractTypeRecord(): ContractTypeRecord | null {
-    const symbol = this.getSelectedMarketSymbol();
+    return this.getContractTypeRecordForSymbol(this.getSelectedMarketSymbol(), this.getSelectedContractType());
+  }
+
+  private getSelectedProposalDefaultsRecord(): ProposalDefaultsRecord | null {
+    return this.getProposalDefaultsRecordForSymbol(this.getSelectedMarketSymbol(), this.getSelectedContractType());
+  }
+
+  private getContractTypeRecordForSymbol(symbol: string, contractType: string): ContractTypeRecord | null {
     const records = this.contractTypesBySymbol.get(symbol) ?? [];
-    const selectedType = this.getSelectedContractType();
-    return records.find((record) => record.contract_type === selectedType) ?? null;
+    const normalizedType = safeString(contractType).trim().toUpperCase();
+    if (!normalizedType) return null;
+    return records.find((record) => record.contract_type === normalizedType) ?? null;
   }
 
-  private shouldShowBarrierControls(contractType: string, record: ContractTypeRecord | null): boolean {
-    const normalized = contractType.trim().toUpperCase();
-    if (record?.barrier_category) {
-      return record.barrier_category !== "none";
-    }
-    return ["HIGH", "LOW", "KNOCK_IN", "KNOCK_OUT", "ENDS_BETWEEN", "ENDS_OUTSIDE", "STAYS_IN", "STAYS_OUT"].includes(normalized);
+  private getProposalDefaultsRecordForSymbol(symbol: string, contractType: string): ProposalDefaultsRecord | null {
+    const defaults = this.proposalDefaultsBySymbol.get(symbol);
+    const normalizedType = safeString(contractType).trim().toUpperCase();
+    if (!defaults || !normalizedType) return null;
+    return defaults.get(normalizedType) ?? null;
   }
 
-  private shouldShowDigitControls(contractType: string, record: ContractTypeRecord | null): boolean {
-    const normalized = contractType.trim().toUpperCase();
-    if (record?.contract_category) {
-      return record.contract_category === "DIGITS";
-    }
-    return ["MATCHES", "DIFFERS", "EVEN", "ODD", "OVER", "UNDER", "PRIME", "NON_PRIME", "RANGE_IN", "RANGE_OUT"].includes(normalized);
+  private getSingleBarrierBounds(defaults: ProposalDefaultsRecord | null): { min: number; max: number } {
+    return {
+      min: defaults?.barrier_min ?? 0.001,
+      max: defaults?.barrier_max ?? 0.318,
+    };
   }
 
-  private shouldShowDigitRangeControls(contractType: string, record: ContractTypeRecord | null): boolean {
-    const normalized = contractType.trim().toUpperCase();
-    if (record?.contract_category) {
-      return record.contract_category === "DIGITS" && ["RANGE_IN", "RANGE_OUT"].includes(normalized);
-    }
-    return ["RANGE_IN", "RANGE_OUT"].includes(normalized);
+  private getDoubleBarrierBounds(
+    defaults: ProposalDefaultsRecord | null,
+  ): { lowMin: number; lowMax: number; highMin: number; highMax: number } {
+    return {
+      lowMin: -(defaults?.barrier_max ?? 0.778),
+      lowMax: -(defaults?.barrier_min ?? 0.001),
+      highMin: defaults?.barrier_min ?? 0.001,
+      highMax: defaults?.barrier_max ?? 0.778,
+    };
   }
 
-  private getBarrierModeForContract(contractType: string, record: ContractTypeRecord | null): "single" | "double" | "disabled" {
-    const barrierCategory = safeString(record?.barrier_category ?? "").trim().toLowerCase();
-    if (barrierCategory === "single" || barrierCategory === "double" || barrierCategory === "disabled") {
-      return barrierCategory;
+  private getDigitTargetBounds(defaults: ProposalDefaultsRecord | null): { min: number; max: number; defaultValue: number } {
+    const min = defaults?.digit_target_min ?? 0;
+    const max = defaults?.digit_target_max ?? 9;
+    return {
+      min,
+      max,
+      defaultValue: this.clampNumber(defaults?.default_digit_target ?? 5, min, max, 5),
+    };
+  }
+
+  private getDigitRangeBounds(
+    defaults: ProposalDefaultsRecord | null,
+    usingBarrierDefaults: boolean,
+  ): { lowMin: number; lowMax: number; highMin: number; highMax: number; lowDefault: number; highDefault: number } {
+    if (usingBarrierDefaults) {
+      const { lowMin, lowMax, highMin, highMax } = this.getDoubleBarrierBounds(defaults);
+      return {
+        lowMin,
+        lowMax,
+        highMin,
+        highMax,
+        lowDefault: this.clampNumber(defaults?.barrier_low_default ?? -0.486, lowMin, lowMax, -0.486),
+        highDefault: this.clampNumber(defaults?.barrier_high_default ?? 0.486, highMin, highMax, 0.486),
+      };
     }
 
-    const normalized = contractType.trim().toUpperCase();
-    if (["ENDS_BETWEEN", "ENDS_OUTSIDE", "STAYS_IN", "STAYS_OUT"].includes(normalized)) {
-      return "double";
-    }
-    if (["HIGH", "LOW", "KNOCK_IN", "KNOCK_OUT"].includes(normalized)) {
-      return "single";
-    }
-    return "disabled";
+    const lowMin = defaults?.digit_low_min ?? 0;
+    const lowMax = defaults?.digit_low_max ?? 8;
+    const highMin = defaults?.digit_high_min ?? 1;
+    const highMax = defaults?.digit_high_max ?? 9;
+    return {
+      lowMin,
+      lowMax,
+      highMin,
+      highMax,
+      lowDefault: this.clampNumber(defaults?.default_digit_low ?? 3, lowMin, lowMax, 3),
+      highDefault: this.clampNumber(defaults?.default_digit_high ?? 6, highMin, highMax, 6),
+    };
+  }
+
+  private getSingleBarrierCategoryDisplays(): Set<string> {
+    return new Set(["High/Low", "Knock In/Out"]);
+  }
+
+  private getDoubleBarrierCategoryDisplays(): Set<string> {
+    return new Set(["Ends Between/Outside", "Stays In/Out"]);
+  }
+
+  private getDigitCategoryDisplays(): Set<string> {
+    return new Set(["Matches/Differs"]);
+  }
+
+  private getSingleBarrierContractTypes(): Set<string> {
+    return new Set(["HIGH", "LOW", "KNOCK_IN", "KNOCK_OUT"]);
+  }
+
+  private getDoubleBarrierContractTypes(): Set<string> {
+    return new Set(["ENDS_BETWEEN", "ENDS_OUTSIDE", "STAYS_IN", "STAYS_OUT"]);
+  }
+
+  private getDigitTargetContractTypes(): Set<string> {
+    return new Set(["MATCHES", "DIFFERS", "OVER", "UNDER", "EVEN", "ODD", "PRIME", "NON_PRIME"]);
+  }
+
+  private getDigitRangeContractTypes(): Set<string> {
+    return new Set(["RANGE_IN", "RANGE_OUT"]);
+  }
+
+  private isDigitContractCategory(record: ContractTypeRecord | null): boolean {
+    return safeString(record?.contract_category ?? "").trim().toUpperCase() === "DIGITS";
+  }
+
+  private hasSingleBarrier(record: ContractTypeRecord | null): boolean {
+    return (record?.barriers ?? 0) === 1 && this.getSingleBarrierContractTypes().has(this.getSelectedContractType());
+  }
+
+  private hasDoubleBarrier(record: ContractTypeRecord | null): boolean {
+    return (record?.barriers ?? 0) === 2 && this.getDoubleBarrierContractTypes().has(this.getSelectedContractType());
+  }
+
+  private needsDigitTarget(record: ContractTypeRecord | null): boolean {
+    return this.isDigitContractCategory(record) && this.getDigitTargetContractTypes().has(this.getSelectedContractType());
+  }
+
+  private needsDigitRange(record: ContractTypeRecord | null): boolean {
+    return this.isDigitContractCategory(record) && this.getDigitRangeContractTypes().has(this.getSelectedContractType());
   }
 
   private setBlockVisibility(block: any, visible: boolean): boolean {
@@ -2065,30 +2243,210 @@ class BotBuilderApp {
 
     this.syncingContractMetadata = true;
     try {
-      const record = this.getSelectedContractTypeRecord();
+      const symbol = this.getSelectedMarketSymbol();
       const contractType = this.getSelectedContractType();
-      const barrierBlock = this.findBlockByType("market_barrier");
-      const digitTargetBlock = this.findBlockByType("market_digits");
-      const digitRangeBlock = this.findBlockByType("market_range");
+      const record = this.getContractTypeRecordForSymbol(symbol, contractType);
+      const defaults = this.getProposalDefaultsRecordForSymbol(symbol, contractType);
+      const executionSettingsBlock = this.findBlockByType("execution_settings");
+      const executionStakeBlock = this.findBlockByType("execution_stake");
+      const executionDurationBlock = this.findBlockByType("execution_duration");
+      const executionUnitBlock = this.findBlockByType("execution_unit");
 
-      if (barrierBlock) {
-        const desiredMode = this.getBarrierModeForContract(contractType, record);
-        const currentMode = safeString(barrierBlock.getFieldValue("BARRIER_MODE") ?? "");
-        if (currentMode !== desiredMode) {
-          barrierBlock.setFieldValue(desiredMode, "BARRIER_MODE");
-        }
+      const executionDefaults = defaults ?? null;
+      const allowedUnits = executionDefaults?.allowed_units?.length ? executionDefaults.allowed_units : ["t"];
+      const unitOptions = allowedUnits.map((unit) => ({ label: unit.toUpperCase(), value: unit }));
+      const selectedUnitValue = safeString(
+        executionSettingsBlock?.getFieldValue("DURATION_UNIT") ??
+          executionUnitBlock?.getFieldValue("DURATION_UNIT") ??
+          executionDefaults?.default_duration_unit ??
+          allowedUnits[0] ??
+          "t",
+      ) || "t";
+      const resolvedUnit = allowedUnits.includes(selectedUnitValue)
+        ? selectedUnitValue
+        : executionDefaults?.default_duration_unit ?? allowedUnits[0] ?? "t";
+      const selectedDurationLimits =
+        executionDefaults?.duration_limits?.[resolvedUnit] ??
+        executionDefaults?.duration_limits?.[executionDefaults?.default_duration_unit ?? "t"] ??
+        { min: 1, max: 15 };
+      const barrierCount = record?.barriers ?? 0;
+      const isSingleBarrier = barrierCount === 1 && this.getSingleBarrierContractTypes().has(contractType);
+      const isDoubleBarrier = barrierCount === 2 && this.getDoubleBarrierContractTypes().has(contractType);
+      const isDigitTarget = this.getDigitTargetContractTypes().has(contractType);
+      const isDigitRange = this.getDigitRangeContractTypes().has(contractType);
+      const removedStaleHelpers =
+        (!isSingleBarrier && this.disposeBlockByType("market_barrier")) ||
+        (!isDoubleBarrier && this.disposeBlockByType("market_barrier_low")) ||
+        (!isDoubleBarrier && this.disposeBlockByType("market_barrier_high")) ||
+        (!isDigitTarget && this.disposeBlockByType("market_digits")) ||
+        (!isDigitRange && this.disposeBlockByType("market_range"));
+      const barrierBlock = isSingleBarrier ? this.ensureBlockByType("market_barrier") : this.findBlockByType("market_barrier");
+      const barrierLowBlock = isDoubleBarrier ? this.ensureBlockByType("market_barrier_low") : this.findBlockByType("market_barrier_low");
+      const barrierHighBlock = isDoubleBarrier ? this.ensureBlockByType("market_barrier_high") : this.findBlockByType("market_barrier_high");
+      const digitTargetBlock = isDigitTarget ? this.ensureBlockByType("market_digits") : this.findBlockByType("market_digits");
+      const digitRangeBlock = isDigitRange ? this.ensureBlockByType("market_range") : this.findBlockByType("market_range");
+      const visibleChanged =
+        removedStaleHelpers ||
+        this.setBlockVisibility(barrierBlock, Boolean(barrierBlock && isSingleBarrier)) ||
+        this.setBlockVisibility(barrierLowBlock, isDoubleBarrier) ||
+        this.setBlockVisibility(barrierHighBlock, isDoubleBarrier) ||
+        this.setBlockVisibility(digitTargetBlock, isDigitTarget) ||
+        this.setBlockVisibility(digitRangeBlock, isDigitRange);
+
+      const stakeMin = executionDefaults?.min_stake ?? 0.5;
+      const stakeMax = executionDefaults?.max_stake ?? 5000;
+      const desiredDuration = this.clampNumber(
+        executionDefaults?.default_duration ?? 5,
+        selectedDurationLimits.min,
+        selectedDurationLimits.max,
+        5,
+      );
+      const desiredStake = this.clampNumber(
+        stakeMin,
+        stakeMin,
+        stakeMax,
+        stakeMin,
+      );
+
+      const syncStakeField = (block: any): void => {
+        if (!block) return;
+        this.updateNumberFieldBounds(block, "STAKE", {
+          min: stakeMin,
+          max: stakeMax,
+          precision: 0.5,
+          defaultValue: desiredStake,
+        });
+      };
+
+      const syncUnitField = (block: any): string | null => {
+        if (!block) return null;
+        return this.updateDropdownFieldOptions(
+          block,
+          "DURATION_UNIT",
+          unitOptions,
+          resolvedUnit,
+          resolvedUnit.toUpperCase(),
+        );
+      };
+
+      const syncDurationField = (block: any, unitValue: string | null): void => {
+        if (!block) return;
+        const nextUnit = allowedUnits.includes(unitValue ?? "") ? (unitValue as string) : resolvedUnit;
+        const nextLimits =
+          executionDefaults?.duration_limits?.[nextUnit] ??
+          executionDefaults?.duration_limits?.[resolvedUnit] ??
+          selectedDurationLimits;
+        this.updateNumberFieldBounds(block, "DURATION", {
+          min: nextLimits.min,
+          max: nextLimits.max,
+          precision: 1,
+          defaultValue: this.clampNumber(executionDefaults?.default_duration ?? desiredDuration, nextLimits.min, nextLimits.max, desiredDuration),
+        });
+      };
+
+      if (executionSettingsBlock) {
+        syncStakeField(executionSettingsBlock);
+        const unitValue = syncUnitField(executionSettingsBlock);
+        syncDurationField(executionSettingsBlock, unitValue);
       }
 
-      const showBarrier = this.shouldShowBarrierControls(contractType, record);
-      const showDigits = this.shouldShowDigitControls(contractType, record);
-      const showDigitRange = this.shouldShowDigitRangeControls(contractType, record);
+      if (executionStakeBlock) {
+        syncStakeField(executionStakeBlock);
+      }
 
-      const changed =
-        this.setBlockVisibility(barrierBlock, showBarrier) ||
-        this.setBlockVisibility(digitTargetBlock, showDigits) ||
-        this.setBlockVisibility(digitRangeBlock, showDigitRange);
+      let unitValue = resolvedUnit;
+      if (executionUnitBlock) {
+        unitValue = syncUnitField(executionUnitBlock) ?? resolvedUnit;
+      }
 
-      if (changed) {
+      if (executionDurationBlock) {
+        syncDurationField(executionDurationBlock, unitValue);
+      }
+
+      if (barrierBlock && isSingleBarrier) {
+        const direction = safeString(executionDefaults?.barrier_direction ?? "positive").toLowerCase();
+        const { min: barrierMinAbs, max: barrierMaxAbs } = this.getSingleBarrierBounds(executionDefaults);
+        const baseBarrier = this.clampNumber(
+          executionDefaults?.barrier_default ?? barrierMinAbs,
+          barrierMinAbs,
+          barrierMaxAbs,
+          barrierMinAbs,
+        );
+        const defaultBarrier = direction === "negative" ? -Math.abs(baseBarrier) : Math.abs(baseBarrier);
+        const barrierMin = direction === "negative" ? -barrierMaxAbs : barrierMinAbs;
+        const barrierMax = direction === "negative" ? -barrierMinAbs : barrierMaxAbs;
+        this.updateNumberFieldBounds(barrierBlock, "BARRIER_VALUE", {
+          min: barrierMin,
+          max: barrierMax,
+          precision: 0.001,
+          defaultValue: defaultBarrier,
+        });
+      }
+
+      if (barrierLowBlock && barrierHighBlock && isDoubleBarrier) {
+        const { lowMin, lowMax, highMin, highMax } = this.getDoubleBarrierBounds(executionDefaults);
+        const barrierLowDefault = this.clampNumber(executionDefaults?.barrier_low_default ?? -0.486, lowMin, lowMax, -0.486);
+        const barrierHighDefault = this.clampNumber(executionDefaults?.barrier_high_default ?? 0.486, highMin, highMax, 0.486);
+        this.updateNumberFieldBounds(barrierLowBlock, "BARRIER_LOW", {
+          min: lowMin,
+          max: lowMax,
+          precision: 0.001,
+          defaultValue: barrierLowDefault,
+        });
+        this.updateNumberFieldBounds(barrierHighBlock, "BARRIER_HIGH", {
+          min: highMin,
+          max: highMax,
+          precision: 0.001,
+          defaultValue: barrierHighDefault,
+        });
+      }
+
+      if (digitTargetBlock && isDigitTarget) {
+        const currentOperator = safeString(digitTargetBlock.getFieldValue("DIGIT_OPERATOR") ?? "MATCHES") || "MATCHES";
+        const operatorOptions = [
+          { label: "Matches", value: "MATCHES" },
+          { label: "Differs", value: "DIFFERS" },
+          { label: "Even", value: "EVEN" },
+          { label: "Odd", value: "ODD" },
+          { label: "Over", value: "OVER" },
+          { label: "Under", value: "UNDER" },
+          { label: "Prime", value: "PRIME" },
+          { label: "Non Prime", value: "NON_PRIME" },
+        ];
+        this.updateDropdownFieldOptions(
+          digitTargetBlock,
+          "DIGIT_OPERATOR",
+          operatorOptions,
+          operatorOptions.some((option) => option.value === currentOperator) ? currentOperator : "MATCHES",
+          currentOperator,
+        );
+        const digitTargetBounds = this.getDigitTargetBounds(executionDefaults);
+        this.updateNumberFieldBounds(digitTargetBlock, "DIGIT_TARGET", {
+          min: digitTargetBounds.min,
+          max: digitTargetBounds.max,
+          precision: 1,
+          defaultValue: digitTargetBounds.defaultValue,
+        });
+      }
+
+      if (digitRangeBlock && isDigitRange) {
+        const usingBarrierDefaults = isDoubleBarrier;
+        const digitRangeBounds = this.getDigitRangeBounds(executionDefaults, usingBarrierDefaults);
+        this.updateNumberFieldBounds(digitRangeBlock, "RANGE_LOW", {
+          min: digitRangeBounds.lowMin,
+          max: digitRangeBounds.lowMax,
+          precision: 1,
+          defaultValue: digitRangeBounds.lowDefault,
+        });
+        this.updateNumberFieldBounds(digitRangeBlock, "RANGE_HIGH", {
+          min: digitRangeBounds.highMin,
+          max: digitRangeBounds.highMax,
+          precision: 1,
+          defaultValue: digitRangeBounds.highDefault,
+        });
+      }
+
+      if (visibleChanged) {
         this.placeSectionBlocks("execution");
         try {
           this.workspace.render();
@@ -2119,8 +2477,11 @@ class BotBuilderApp {
     };
   }
 
-  private normalizeContractTypesPayload(payload: Record<string, unknown>): { symbol: string; contractTypes: ContractTypeRecord[] } | null {
-    const symbol = safeString(payload.symbol ?? payload.underlying_symbol ?? "");
+  private normalizeContractTypesPayload(
+    payload: Record<string, unknown>,
+    fallbackSymbol: string | null = null,
+  ): { symbol: string; contractTypes: ContractTypeRecord[] } | null {
+    const symbol = safeString(payload.symbol ?? payload.underlying_symbol ?? fallbackSymbol ?? "");
     const source = payload.contract_types ?? payload.data ?? payload.message;
     let list: unknown[] = [];
     if (Array.isArray(source)) {
@@ -2138,12 +2499,108 @@ class BotBuilderApp {
     return { symbol, contractTypes };
   }
 
+  private normalizeProposalDefaultsRecord(value: unknown): ProposalDefaultsRecord | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    const contractType = safeString(record.contract_type ?? "");
+    if (!contractType) return null;
+
+    const durationLimits: Record<string, DurationLimitRecord> = {};
+    const rawDurationLimits = record.duration_limits;
+    if (rawDurationLimits && typeof rawDurationLimits === "object" && !Array.isArray(rawDurationLimits)) {
+      for (const [unit, limit] of Object.entries(rawDurationLimits as Record<string, unknown>)) {
+        if (!limit || typeof limit !== "object" || Array.isArray(limit)) continue;
+        const nextLimit = limit as Record<string, unknown>;
+        const min = this.toFiniteNumber(nextLimit.min);
+        const max = this.toFiniteNumber(nextLimit.max);
+        if (min != null && max != null) {
+          durationLimits[unit] = { min, max };
+        }
+      }
+    }
+
+    return {
+      contract_type: contractType,
+      allowed_units: Array.isArray(record.allowed_units)
+        ? record.allowed_units.map((unit) => safeString(unit)).filter((unit) => Boolean(unit))
+        : [],
+      default_duration: this.toFiniteNumber(record.default_duration) ?? 5,
+      default_duration_unit: safeString(record.default_duration_unit ?? "t") || "t",
+      default_stake: this.toFiniteNumber(record.default_stake) ?? 10,
+      duration_limits: durationLimits,
+      min_stake: this.toFiniteNumber(record.min_stake) ?? 0.5,
+      max_stake: this.toFiniteNumber(record.max_stake) ?? 5000,
+      barrier_default: this.toFiniteNumber(record.barrier_default) ?? undefined,
+      barrier_direction: safeString(record.barrier_direction ?? ""),
+      barrier_max: this.toFiniteNumber(record.barrier_max) ?? undefined,
+      barrier_min: this.toFiniteNumber(record.barrier_min) ?? undefined,
+      barrier_low_default: this.toFiniteNumber(record.barrier_low_default) ?? undefined,
+      barrier_high_default: this.toFiniteNumber(record.barrier_high_default) ?? undefined,
+      digit_target_min: this.toFiniteNumber(record.digit_target_min) ?? undefined,
+      digit_target_max: this.toFiniteNumber(record.digit_target_max) ?? undefined,
+      default_digit_target: this.toFiniteNumber(record.default_digit_target) ?? undefined,
+      default_digit_low: this.toFiniteNumber(record.default_digit_low) ?? undefined,
+      default_digit_high: this.toFiniteNumber(record.default_digit_high) ?? undefined,
+      digit_low_min: this.toFiniteNumber(record.digit_low_min) ?? undefined,
+      digit_low_max: this.toFiniteNumber(record.digit_low_max) ?? undefined,
+      digit_high_min: this.toFiniteNumber(record.digit_high_min) ?? undefined,
+      digit_high_max: this.toFiniteNumber(record.digit_high_max) ?? undefined,
+      hint: safeString(record.hint ?? ""),
+      spot: this.toFiniteNumber(record.spot) ?? undefined,
+    };
+  }
+
+  private normalizeProposalDefaultsPayload(
+    payload: Record<string, unknown>,
+    fallbackSymbol: string | null = null,
+  ): { symbol: string; defaults: ProposalDefaultsRecord[] } | null {
+    const symbol = safeString(payload.symbol ?? payload.underlying_symbol ?? fallbackSymbol ?? "");
+    const source = payload.defaults ?? payload.data ?? payload.message;
+    let list: unknown[] = [];
+    if (Array.isArray(source)) {
+      list = source;
+    } else if (source && typeof source === "object" && !Array.isArray(source)) {
+      const nested = (source as Record<string, unknown>).defaults;
+      if (Array.isArray(nested)) {
+        list = nested;
+      }
+    }
+    const defaults = list
+      .map((item: unknown) => this.normalizeProposalDefaultsRecord(item))
+      .filter((item): item is ProposalDefaultsRecord => Boolean(item));
+    if (!symbol) return null;
+    return { symbol, defaults };
+  }
+
   private handleContractTypesPayload(payload: Record<string, unknown>): void {
-    const normalized = this.normalizeContractTypesPayload(payload);
+    const normalized = this.normalizeContractTypesPayload(
+      payload,
+      this.getPendingSymbol(this.pendingContractTypeSymbols) ?? this.getSelectedMarketSymbol(),
+    );
     if (!normalized) return;
 
     this.contractTypesBySymbol.set(normalized.symbol, normalized.contractTypes);
     this.pendingContractTypeSymbols.delete(normalized.symbol);
+    this.syncExecutionHelperVisibility();
+    if (normalized.symbol === this.getSelectedMarketSymbol()) {
+      this.syncMarketDropdowns();
+    }
+  }
+
+  private handleProposalDefaultsPayload(payload: Record<string, unknown>): void {
+    const normalized = this.normalizeProposalDefaultsPayload(
+      payload,
+      this.getPendingSymbol(this.pendingProposalDefaultsSymbols) ?? this.getSelectedMarketSymbol(),
+    );
+    if (!normalized) return;
+
+    const defaultsByType = new Map<string, ProposalDefaultsRecord>();
+    for (const record of normalized.defaults) {
+      defaultsByType.set(record.contract_type, record);
+    }
+
+    this.proposalDefaultsBySymbol.set(normalized.symbol, defaultsByType);
+    this.pendingProposalDefaultsSymbols.delete(normalized.symbol);
     this.syncExecutionHelperVisibility();
     if (normalized.symbol === this.getSelectedMarketSymbol()) {
       this.syncMarketDropdowns();
@@ -2159,12 +2616,22 @@ class BotBuilderApp {
     }
   }
 
+  private requestProposalDefaultsForSymbol(symbol: string): void {
+    const nextSymbol = symbol.trim() || DEFAULT_SYMBOL;
+    if (nextSymbol.startsWith("__loading")) return;
+    if (this.pendingProposalDefaultsSymbols.has(nextSymbol)) return;
+    if (wsService.requestProposalDefaults(nextSymbol)) {
+      this.pendingProposalDefaultsSymbols.add(nextSymbol);
+    }
+  }
+
   private updateDropdownFieldOptions(
     block: any,
     fieldName: string,
     options: Array<{ label: string; value: string }>,
     preferredValue?: string | null,
     preferredLabel?: string | null,
+    preserveCurrentValue = true,
   ): string | null {
     if (!block || !Array.isArray(options)) return null;
 
@@ -2184,7 +2651,7 @@ class BotBuilderApp {
     }
 
     const currentValue = safeString(block.getFieldValue(fieldName));
-    if (currentValue && currentValue !== preferredValue) {
+    if (preserveCurrentValue && currentValue && currentValue !== preferredValue) {
       pushOption(currentValue, currentValue);
     }
 
@@ -2213,6 +2680,158 @@ class BotBuilderApp {
     return nextValue;
   }
 
+  private clampNumber(value: unknown, min: number | null | undefined, max: number | null | undefined, fallback: number): number {
+    const numeric = this.toFiniteNumber(value) ?? fallback;
+    const nextMin = min ?? numeric;
+    const nextMax = max ?? numeric;
+    return Math.min(nextMax, Math.max(nextMin, numeric));
+  }
+
+  private updateNumberFieldBounds(
+    block: any,
+    fieldName: string,
+    bounds: { min?: number; max?: number; precision?: number; defaultValue?: number } = {},
+  ): number | null {
+    if (!block || typeof block.getField !== "function") return null;
+    const field = block.getField(fieldName);
+    if (!field) return null;
+
+    const fieldAny = field as any;
+    if (bounds.min != null) fieldAny.min_ = bounds.min;
+    if (bounds.max != null) fieldAny.max_ = bounds.max;
+    if (bounds.precision != null) fieldAny.precision_ = bounds.precision;
+    if (bounds.defaultValue != null) fieldAny.value_ = bounds.defaultValue;
+
+    const currentValue = this.toFiniteNumber(block.getFieldValue(fieldName));
+    const nextValue = this.clampNumber(
+      currentValue ?? bounds.defaultValue ?? 0,
+      bounds.min,
+      bounds.max,
+      bounds.defaultValue ?? 0,
+    );
+
+    if (currentValue == null || nextValue !== currentValue) {
+      block.setFieldValue(String(nextValue), fieldName);
+    }
+
+    return nextValue;
+  }
+
+  private getPendingSymbol(pendingSymbols: Set<string>): string | null {
+    return pendingSymbols.values().next().value ?? null;
+  }
+
+  private validatePayloadAgainstMetadata(payload: Record<string, unknown>): string[] {
+    const errors: string[] = [];
+    const contractType = String(payload.contract_type ?? this.getSelectedContractType()).trim().toUpperCase();
+    const symbol = String(payload.symbol ?? this.getSelectedMarketSymbol()).trim() || DEFAULT_SYMBOL;
+    const defaults = this.getProposalDefaultsRecordForSymbol(symbol, contractType);
+    const contractRecord = this.getContractTypeRecordForSymbol(symbol, contractType);
+
+    if (!defaults) {
+      errors.push("Contract metadata is still loading. Click Connect and wait for symbols to refresh.");
+      return errors;
+    }
+
+    const stake = this.toFiniteNumber(payload.stake);
+    if (stake == null) {
+      errors.push("Stake is required.");
+    } else if (stake < defaults.min_stake || stake > defaults.max_stake) {
+      errors.push(`Stake must be between ${defaults.min_stake} and ${defaults.max_stake}.`);
+    }
+
+    const durationUnit = String(payload.duration_unit ?? defaults.default_duration_unit ?? "t").trim();
+    if (!defaults.allowed_units.includes(durationUnit)) {
+      errors.push(`Duration unit must be one of: ${defaults.allowed_units.join(", ")}.`);
+    }
+    const durationLimits =
+      defaults.duration_limits[durationUnit] ??
+      defaults.duration_limits[defaults.default_duration_unit] ??
+      null;
+    const duration = this.toFiniteNumber(payload.duration);
+    if (duration == null) {
+      errors.push("Duration is required.");
+    } else if (durationLimits && (duration < durationLimits.min || duration > durationLimits.max)) {
+      errors.push(`Duration must be between ${durationLimits.min} and ${durationLimits.max} for unit ${durationUnit}.`);
+    }
+
+    const barrierCategory = safeString(contractRecord?.barrier_category ?? "").trim().toLowerCase();
+    const barrierCount = contractRecord?.barriers ?? 0;
+    const isSingleBarrier = barrierCategory !== "none" && barrierCount === 1 && this.getSingleBarrierContractTypes().has(contractType);
+    const isDoubleBarrier = barrierCategory !== "none" && barrierCount === 2 && this.getDoubleBarrierContractTypes().has(contractType);
+    const isDigitTarget = this.isDigitContractCategory(contractRecord) && this.getDigitTargetContractTypes().has(contractType);
+    const isDigitRange = this.isDigitContractCategory(contractRecord) && this.getDigitRangeContractTypes().has(contractType);
+
+    if (isSingleBarrier) {
+      const barrier = this.toFiniteNumber(payload.barrier);
+      if (barrier == null) {
+        errors.push(`Barrier is required for ${contractType}.`);
+      } else {
+        const direction = safeString(defaults.barrier_direction ?? "positive").toLowerCase();
+        const { min: barrierMinAbs, max: barrierMaxAbs } = this.getSingleBarrierBounds(defaults);
+        const barrierMin = direction === "negative" ? -barrierMaxAbs : barrierMinAbs;
+        const barrierMax = direction === "negative" ? -barrierMinAbs : barrierMaxAbs;
+        const low = Math.min(barrierMin, barrierMax);
+        const high = Math.max(barrierMin, barrierMax);
+        if (barrier < low || barrier > high) {
+          errors.push(`Barrier must be between ${low} and ${high}.`);
+        }
+      }
+    }
+
+    if (isDoubleBarrier) {
+      const barrierLow = this.toFiniteNumber(payload.barrier_low);
+      const barrierHigh = this.toFiniteNumber(payload.barrier_high);
+      const { lowMin, lowMax, highMin, highMax } = this.getDoubleBarrierBounds(defaults);
+      if (barrierLow == null || barrierHigh == null) {
+        errors.push(`Double barrier is required for ${contractType}.`);
+      } else {
+        if (barrierLow >= barrierHigh) {
+          errors.push("Lower barrier must be less than upper barrier.");
+        }
+        if (barrierLow < Math.min(lowMin, lowMax) || barrierLow > Math.max(lowMin, lowMax)) {
+          errors.push(`Lower barrier must be between ${Math.min(lowMin, lowMax)} and ${Math.max(lowMin, lowMax)}.`);
+        }
+        if (barrierHigh < highMin || barrierHigh > highMax) {
+          errors.push(`Upper barrier must be between ${highMin} and ${highMax}.`);
+        }
+      }
+    }
+
+    if (isDigitTarget) {
+      const digitTarget = this.toFiniteNumber(payload.digit_target);
+      if (digitTarget == null) {
+        errors.push(`Digit target is required for ${contractType}.`);
+      } else {
+        const { min, max } = this.getDigitTargetBounds(defaults);
+        if (digitTarget < min || digitTarget > max) {
+          errors.push(`Digit target must be between ${min} and ${max}.`);
+        }
+      }
+    }
+
+    if (isDigitRange) {
+      const digitLow = this.toFiniteNumber(payload.digit_low);
+      const digitHigh = this.toFiniteNumber(payload.digit_high);
+      const { lowMin, lowMax, highMin, highMax } = this.getDigitRangeBounds(defaults, false);
+      if (digitLow == null || digitHigh == null) {
+        errors.push(`Digit range is required for ${contractType}.`);
+      } else {
+        if (digitLow >= digitHigh) {
+          errors.push("Digit low must be less than digit high.");
+        }
+        if (digitLow < lowMin || digitLow > lowMax) {
+          errors.push(`Digit low must be between ${lowMin} and ${lowMax}.`);
+        }
+        if (digitHigh < highMin || digitHigh > highMax) {
+          errors.push(`Digit high must be between ${highMin} and ${highMax}.`);
+        }
+      }
+    }
+
+    return errors;
+  }
+
   private syncMarketDropdowns(): void {
     if (!this.workspace || this.syncingContractMetadata) return;
 
@@ -2223,40 +2842,51 @@ class BotBuilderApp {
       if (records.length === 0 && wsService.isConnected()) {
         this.requestContractTypesForSymbol(symbol);
       }
+      if (!this.proposalDefaultsBySymbol.has(symbol) && wsService.isConnected()) {
+        this.requestProposalDefaultsForSymbol(symbol);
+      }
       const marketSettingsBlock = this.findBlockByType("market_settings");
       const categoryBlock = this.findBlockByType("market_category");
       const contractBlock = this.findBlockByType("market_contract");
       const currentCategory = this.getSelectedContractCategory();
       const currentContract = this.getSelectedContractType();
+      const currentCategoryRecord = this.resolveContractCategoryRecord(records, currentCategory);
+      const currentCategoryDisplay = this.getContractCategoryDisplay(currentCategoryRecord) || safeString(currentCategory);
 
       const categoryOptions = records.length
         ? Array.from(
             new Map(
               records.map((record) => [
-                record.contract_category,
+                record.contract_category_display || record.contract_category,
                 {
                   label: record.contract_category_display || record.contract_category,
-                  value: record.contract_category,
+                  value: record.contract_category_display || record.contract_category,
                 },
               ]),
             ).values(),
           )
+            .sort((left, right) => left.label.localeCompare(right.label))
         : [];
 
       const contractForCurrentType = records.find((record) => record.contract_type === currentContract) ?? null;
       const contractForUpType = records.find((record) => record.contract_type === "UP") ?? null;
       const preferredCategory =
+        currentCategoryRecord?.contract_category_display ||
+        contractForCurrentType?.contract_category_display ||
+        contractForUpType?.contract_category_display ||
+        records[0]?.contract_category_display ||
+        currentCategoryRecord?.contract_category ||
         contractForCurrentType?.contract_category ||
         contractForUpType?.contract_category ||
         records[0]?.contract_category ||
-        currentCategory ||
-        "PATH_INDEPENDENT";
+        currentCategoryDisplay;
       const nextCategory = this.updateDropdownFieldOptions(
         marketSettingsBlock ?? categoryBlock,
         "CONTRACT_CATEGORY",
         categoryOptions,
         preferredCategory,
-        contractForCurrentType?.contract_category_display || contractForCurrentType?.contract_category || null,
+        preferredCategory,
+        false,
       ) ?? preferredCategory;
       this.selectedContractCategory = nextCategory;
       if (categoryBlock && categoryBlock !== marketSettingsBlock) {
@@ -2265,29 +2895,38 @@ class BotBuilderApp {
           "CONTRACT_CATEGORY",
           categoryOptions,
           nextCategory,
-          contractForCurrentType?.contract_category_display || nextCategory,
+          nextCategory,
+          false,
         );
       }
 
-      const contractRecords = records.length ? records.filter((record) => record.contract_category === nextCategory) : [];
-      const contractOptionSource = contractRecords.length ? contractRecords : records;
+      const selectedCategoryRecord =
+        this.resolveContractCategoryRecord(records, nextCategory) ?? null;
+      const selectedCategoryValue = this.getContractCategoryDisplay(selectedCategoryRecord) || nextCategory;
+      const contractOptionSource = records.length
+        ? records.filter(
+            (record) =>
+              record.contract_category_display === selectedCategoryValue ||
+              record.contract_category === selectedCategoryValue,
+          )
+        : [];
       const contractOptions = contractOptionSource.length
         ? Array.from(
             new Map(
               contractOptionSource.map((record) => [
                 record.contract_type,
                 {
-                  label: record.contract_display || record.contract_type,
+                  label: record.contract_type,
                   value: record.contract_type,
                 },
               ]),
             ).values(),
-          )
+          ).sort((left, right) => left.label.localeCompare(right.label))
         : [];
 
       const contractOptionsValues = new Set(contractOptions.map((option) => option.value));
       const preferredContract =
-        (contractRecords.find((record) => record.contract_type === currentContract)?.contract_type ?? "") ||
+        (contractOptionSource.find((record) => record.contract_type === currentContract)?.contract_type ?? "") ||
         (contractOptionSource.find((record) => record.contract_type === "UP")?.contract_type ?? "") ||
         (contractOptionsValues.has(this.selectedContractType) ? this.selectedContractType : "") ||
         currentContract;
@@ -2298,7 +2937,7 @@ class BotBuilderApp {
         "CONTRACT_TYPE",
         contractOptions,
         preferredContract,
-        preferredContractRecord?.contract_display || preferredContractRecord?.contract_type || null,
+        preferredContractRecord?.contract_type || null,
       ) ?? preferredContract;
       this.selectedContractType = nextContract;
       if (contractBlock && contractBlock !== marketSettingsBlock) {
@@ -2308,9 +2947,11 @@ class BotBuilderApp {
           "CONTRACT_TYPE",
           contractOptions,
           nextContract,
-          selectedRecord?.contract_display || selectedRecord?.contract_type || null,
+          selectedRecord?.contract_type || null,
         );
       }
+      this.requestProposalDefaultsForSymbol(symbol);
+      this.syncExecutionHelperVisibility();
     } finally {
       this.syncingContractMetadata = false;
     }
@@ -2914,6 +3555,7 @@ class BotBuilderApp {
     ].filter((block, index, array) => array.findIndex((candidate) => candidate.id === block.id) === index);
 
     this.placeBlockWithinSection(sectionBlock, blocks, sectionId);
+    this.connectSectionBlocks(sectionId, blocks.filter((block) => this.isBlockVisible(block)));
   }
 
   private placeBlockWithinSection(sectionBlock: any, blocks: any[], sectionId: SectionId): void {
@@ -2955,6 +3597,14 @@ class BotBuilderApp {
     }
   }
 
+  private isBlockVisible(block: any): boolean {
+    if (!block) return false;
+    if (typeof block.isVisible === "function") {
+      return Boolean(block.isVisible());
+    }
+    return true;
+  }
+
   private connectSectionBlocks(sectionId: SectionId, blocks: any[]): void {
     const sectionBlock = this.findBlockByType(getSectionBlockType(sectionId));
     const stackConnection = sectionBlock?.getInput("STACK")?.connection;
@@ -2966,17 +3616,43 @@ class BotBuilderApp {
       return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
     });
 
+    const visibleBlocks = orderedBlocks.filter((block) => this.isBlockVisible(block));
+    if (visibleBlocks.length === 0) return;
+
     if (stackConnection.isConnected()) {
       stackConnection.disconnect();
     }
 
-    stackConnection.connect(orderedBlocks[0].previousConnection);
-    this.chainSectionBlocks(orderedBlocks);
+    stackConnection.connect(visibleBlocks[0].previousConnection);
+    this.chainSectionBlocks(visibleBlocks);
   }
 
   private findBlockByType(type: string): any | null {
     if (!this.workspace) return null;
     return this.workspace.getAllBlocks(false).find((block: any) => block.type === type) ?? null;
+  }
+
+  private ensureBlockByType(type: string): any | null {
+    if (!this.workspace) return null;
+    const existing = this.findBlockByType(type);
+    if (existing) return existing;
+    const template = BLOCK_TEMPLATES_BY_TYPE.get(type);
+    if (!template) return null;
+    const block = this.workspace.newBlock(type);
+    block.initSvg();
+    block.render();
+    this.setBlockVisibility(block, false);
+    return block;
+  }
+
+  private disposeBlockByType(type: string): boolean {
+    const block = this.findBlockByType(type);
+    if (!block) return false;
+    if (typeof block.dispose === "function") {
+      block.dispose(true);
+      return true;
+    }
+    return false;
   }
 
   private seedWorkspace(resetExisting = false, symbol = DEFAULT_SYMBOL, includeStarterBlocks = true): void {
@@ -3015,33 +3691,25 @@ class BotBuilderApp {
         marketSettingsBlock.initSvg();
         marketSettingsBlock.render();
         this.updateDropdownFieldOptions(marketSettingsBlock, "SYMBOL", [], liveSymbol, liveSymbol);
-        this.updateDropdownFieldOptions(marketSettingsBlock, "CONTRACT_CATEGORY", [], "PATH_INDEPENDENT", "PATH_INDEPENDENT");
+        this.updateDropdownFieldOptions(
+          marketSettingsBlock,
+          "CONTRACT_CATEGORY",
+          [],
+          "__loading_contract_categories__",
+          "Loading contract categories from server...",
+        );
         this.updateDropdownFieldOptions(marketSettingsBlock, "CONTRACT_TYPE", [], "UP", "UP");
         // marketSettingsBlock.setFieldValue("TRUE", "LIVE_SYNC");
-        this.selectedContractCategory = "PATH_INDEPENDENT";
+        this.selectedContractCategory = "__loading_contract_categories__";
         this.selectedContractType = "UP";
 
         const executionSettingsBlock = this.workspace.newBlock("execution_settings");
         executionSettingsBlock.initSvg();
         executionSettingsBlock.render();
-        executionSettingsBlock.setFieldValue("10", "STAKE");
+        executionSettingsBlock.setFieldValue("0.5", "STAKE");
         executionSettingsBlock.setFieldValue("5", "DURATION");
         executionSettingsBlock.setFieldValue("t", "DURATION_UNIT");
         // executionSettingsBlock.setFieldValue("TRUE", "AUTO_RETRY");
-
-        const barrierBlock = this.workspace.newBlock("market_barrier");
-        barrierBlock.initSvg();
-        barrierBlock.render();
-        barrierBlock.setFieldValue("single", "BARRIER_MODE");
-
-        const digitTargetBlock = this.workspace.newBlock("market_digits");
-        digitTargetBlock.initSvg();
-        digitTargetBlock.render();
-        digitTargetBlock.setFieldValue("MATCHES", "DIGIT_OPERATOR");
-
-        const digitRangeBlock = this.workspace.newBlock("market_range");
-        digitRangeBlock.initSvg();
-        digitRangeBlock.render();
 
         const indicatorsSettingsBlock = this.workspace.newBlock("indicators_settings");
         indicatorsSettingsBlock.initSvg();
@@ -3062,12 +3730,7 @@ class BotBuilderApp {
         this.syncSymbolDropdowns();
 
         const marketBlocks = [marketSettingsBlock];
-        const executionBlocks = [
-          executionSettingsBlock,
-          barrierBlock,
-          digitTargetBlock,
-          digitRangeBlock,
-        ];
+        const executionBlocks = [executionSettingsBlock];
         const indicatorsBlocks = [indicatorsSettingsBlock];
         const conditionsBlocks = [conditionsSettingsBlock];
         const restartBlocks = [restartSettingsBlock];
@@ -3175,6 +3838,10 @@ class BotBuilderApp {
       conditions: snapshot.conditions as any,
       restart: snapshot.restart as any,
     });
+    const payloadValidationErrors = snapshot.apiPayload ? this.validatePayloadAgainstMetadata(snapshot.apiPayload) : ["Build market and execution blocks first."];
+    const combinedValidationErrors = [...validation.errors, ...payloadValidationErrors.filter((error) => !validation.errors.includes(error))];
+    const combinedWarnings = validation.warnings ?? [];
+    const ready = combinedValidationErrors.length === 0;
 
     if (jsonEl) {
       jsonEl.textContent = formatJson(snapshot);
@@ -3184,22 +3851,21 @@ class BotBuilderApp {
       payloadEl.textContent = snapshot.apiPayload ? formatJson(snapshot.apiPayload) : "// Incomplete strategy";
     }
 
-    const ready = validation.valid;
     if (statusPill) {
       statusPill.className = `bb-status-pill ${ready ? "is-ready" : "is-error"}`;
       statusPill.textContent = ready ? "Ready" : "Needs attention";
     }
 
     if (topbarStatus) {
-      topbarStatus.textContent = ready ? "Ready" : `${validation.errors.length} issues`;
+      topbarStatus.textContent = ready ? "Ready" : `${combinedValidationErrors.length} issues`;
     }
 
     if (statusCaption) {
       statusCaption.textContent = ready
-        ? validation.warnings?.length
-          ? validation.warnings.join(" ")
+        ? combinedWarnings.length
+          ? combinedWarnings.join(" ")
           : "Workspace is structurally sound."
-        : validation.errors.join(" ");
+        : combinedValidationErrors.join(" ");
     }
 
     if (resultsEl) {
@@ -3214,7 +3880,7 @@ class BotBuilderApp {
         `
         : `
           <div class="bb-result-error">Validation failed.</div>
-          <div class="bb-result-list">${validation.errors.map((error) => `<div>${error}</div>`).join("")}</div>
+          <div class="bb-result-list">${combinedValidationErrors.map((error) => `<div>${error}</div>`).join("")}</div>
         `;
     }
   }
@@ -3230,9 +3896,18 @@ class BotBuilderApp {
     if (!this.lastSnapshot) return;
 
     const payload = this.createOrderPayload(this.lastSnapshot);
-    const validation = payload
+    const payloadValidationErrors = payload ? this.validatePayloadAgainstMetadata(payload) : ["Build market and execution blocks first."];
+    const apiValidation = payload
       ? validationService.validateApiPayload(payload)
       : { valid: false, errors: ["Build market and execution blocks first."], warnings: [] };
+    const validationErrors = [
+      ...payloadValidationErrors,
+      ...apiValidation.errors.filter((error) => !payloadValidationErrors.includes(error)),
+    ];
+    const validation = {
+      valid: validationErrors.length === 0,
+      errors: validationErrors,
+    };
     const statusPill = this.root.querySelector<HTMLElement>("#bb-status-pill");
     const statusCaption = this.root.querySelector<HTMLElement>("#bb-status-caption");
     const resultsEl = this.root.querySelector<HTMLElement>("#bb-results");

@@ -259,7 +259,7 @@ export class ValidationService {
    * Check if contract type requires digit target
    */
   private requiresDigit(contractType: string): boolean {
-    const digitTypes = ['MATCHES', 'DIFFERS', 'OVER', 'UNDER'];
+    const digitTypes = ['MATCHES', 'DIFFERS', 'OVER', 'UNDER', 'EVEN', 'ODD', 'PRIME', 'NON_PRIME'];
     return digitTypes.includes(contractType);
   }
 

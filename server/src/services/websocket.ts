@@ -193,6 +193,10 @@ export class WebSocketService {
       this.emit('contract_types', payload);
       return;
     }
+    if (data.status === 'ok' && payload && Array.isArray((payload as Record<string, unknown>).defaults)) {
+      this.emit('proposal_defaults', payload);
+      return;
+    }
     const message = data as unknown as { message?: unknown };
     if (data.status === 'ok' && Array.isArray(message.message)) {
       this.emit('symbols', message.message);
@@ -243,6 +247,10 @@ export class WebSocketService {
 
   requestContractTypes(symbol: string): boolean {
     return this.send({ request: 'contract_types', symbol });
+  }
+
+  requestProposalDefaults(symbol: string): boolean {
+    return this.send({ request: 'proposal_defaults', symbol });
   }
 
   subscribe(symbol: string): boolean {
