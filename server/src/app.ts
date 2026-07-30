@@ -2068,11 +2068,29 @@ class BotBuilderApp {
   private resolveContractCategoryRecord(records: ContractTypeRecord[], selectedCategory: string): ContractTypeRecord | null {
     const normalizedCategory = safeString(selectedCategory);
     if (!normalizedCategory) return null;
-    return (
-      records.find((record) => record.contract_category_display === normalizedCategory) ??
-      records.find((record) => record.contract_category === normalizedCategory) ??
-      null
+    
+    // Try exact match on display name first
+    let found = records.find((record) => record.contract_category_display === normalizedCategory);
+    if (found) return found;
+    
+    // Try exact match on category
+    found = records.find((record) => record.contract_category === normalizedCategory);
+    if (found) return found;
+    
+    // Try case-insensitive match
+    const lowerCategory = normalizedCategory.toLowerCase();
+    found = records.find((record) => 
+      record.contract_category_display?.toLowerCase() === lowerCategory ||
+      record.contract_category?.toLowerCase() === lowerCategory
     );
+    if (found) return found;
+    
+    // Try partial match
+    found = records.find((record) => 
+      record.contract_category_display?.toLowerCase().includes(lowerCategory) ||
+      lowerCategory.includes(record.contract_category_display?.toLowerCase() || "")
+    );
+    return found ?? null;
   }
 
   private getContractCategoryDisplay(record: ContractTypeRecord | null): string {
@@ -2180,13 +2198,19 @@ class BotBuilderApp {
   }
 
   private getDigitTargetContractTypes(): Set<string> {
-    return new Set(["MATCHES", "DIFFERS", "OVER", "UNDER", "EVEN", "ODD", "PRIME", "NON_PRIME"]);
+    // From contract_types response - DIGITS category with barriers: 1
+    return new Set(["MATCHES", "DIFFERS", "OVER", "UNDER"]);
   }
 
   private getDigitRangeContractTypes(): Set<string> {
+    // From contract_types response - DIGITS category with barriers: 2
     return new Set(["RANGE_IN", "RANGE_OUT"]);
   }
 
+  private getEvenOddContractTypes(): Set<string> {
+    // From contract_types response - DIGITS category with barriers: 0
+    return new Set(["EVEN", "ODD", "PRIME", "NON_PRIME"]);
+  }
   private isDigitContractCategory(record: ContractTypeRecord | null): boolean {
     return safeString(record?.contract_category ?? "").trim().toUpperCase() === "DIGITS";
   }
@@ -2224,20 +2248,17 @@ class BotBuilderApp {
       const contractType = this.getSelectedContractType();
       const record = this.getContractTypeRecordForSymbol(symbol, contractType);
       const defaults = this.getProposalDefaultsRecordForSymbol(symbol, contractType);
-      const executionSettingsBlock = this.findBlockByType("execution_settings");
-      const executionStakeBlock = this.findBlockByType("execution_stake");
-      const executionDurationBlock = this.findBlockByType("execution_duration");
-      const executionUnitBlock = this.findBlockByType("execution_unit");
-
+      
+      // Define all needed variables
       const executionDefaults = defaults ?? null;
       const allowedUnits = executionDefaults?.allowed_units?.length ? executionDefaults.allowed_units : ["t"];
       const unitOptions = allowedUnits.map((unit) => ({ label: unit.toUpperCase(), value: unit }));
       const selectedUnitValue = safeString(
-        executionSettingsBlock?.getFieldValue("DURATION_UNIT") ??
-          executionUnitBlock?.getFieldValue("DURATION_UNIT") ??
-          executionDefaults?.default_duration_unit ??
-          allowedUnits[0] ??
-          "t",
+        this.findBlockByType("execution_settings")?.getFieldValue("DURATION_UNIT") ??
+        this.findBlockByType("execution_unit")?.getFieldValue("DURATION_UNIT") ??
+        executionDefaults?.default_duration_unit ??
+        allowedUnits[0] ??
+        "t"
       ) || "t";
       const resolvedUnit = allowedUnits.includes(selectedUnitValue)
         ? selectedUnitValue
@@ -2246,22 +2267,35 @@ class BotBuilderApp {
         executionDefaults?.duration_limits?.[resolvedUnit] ??
         executionDefaults?.duration_limits?.[executionDefaults?.default_duration_unit ?? "t"] ??
         { min: 1, max: 15 };
+      
+      // Get block references
+      const executionSettingsBlock = this.findBlockByType("execution_settings");
+      const executionStakeBlock = this.findBlockByType("execution_stake");
+      const executionUnitBlock = this.findBlockByType("execution_unit");
+      const executionDurationBlock = this.findBlockByType("execution_duration");
+      
       const barrierCount = record?.barriers ?? 0;
       const isSingleBarrier = barrierCount === 1 && this.getSingleBarrierContractTypes().has(contractType);
       const isDoubleBarrier = barrierCount === 2 && this.getDoubleBarrierContractTypes().has(contractType);
       const isDigitTarget = this.getDigitTargetContractTypes().has(contractType);
       const isDigitRange = this.getDigitRangeContractTypes().has(contractType);
+      
+      // Remove stale blocks
       const removedStaleHelpers =
         (!isSingleBarrier && this.disposeBlockByType("market_barrier")) ||
         (!isDoubleBarrier && this.disposeBlockByType("market_barrier_low")) ||
         (!isDoubleBarrier && this.disposeBlockByType("market_barrier_high")) ||
         (!isDigitTarget && this.disposeBlockByType("market_digits")) ||
         (!isDigitRange && this.disposeBlockByType("market_range"));
+      
+      // Ensure blocks exist and set visibility
       const barrierBlock = isSingleBarrier ? this.ensureBlockByType("market_barrier") : this.findBlockByType("market_barrier");
       const barrierLowBlock = isDoubleBarrier ? this.ensureBlockByType("market_barrier_low") : this.findBlockByType("market_barrier_low");
       const barrierHighBlock = isDoubleBarrier ? this.ensureBlockByType("market_barrier_high") : this.findBlockByType("market_barrier_high");
       const digitTargetBlock = isDigitTarget ? this.ensureBlockByType("market_digits") : this.findBlockByType("market_digits");
       const digitRangeBlock = isDigitRange ? this.ensureBlockByType("market_range") : this.findBlockByType("market_range");
+      
+      // Set visibility
       const visibleChanged =
         removedStaleHelpers ||
         this.setBlockVisibility(barrierBlock, Boolean(barrierBlock && isSingleBarrier)) ||
@@ -2270,6 +2304,7 @@ class BotBuilderApp {
         this.setBlockVisibility(digitTargetBlock, isDigitTarget) ||
         this.setBlockVisibility(digitRangeBlock, isDigitRange);
 
+      // Stake limits
       const stakeMin = executionDefaults?.min_stake ?? 0.5;
       const stakeMax = executionDefaults?.max_stake ?? 5000;
       const desiredDuration = this.clampNumber(
@@ -2285,6 +2320,7 @@ class BotBuilderApp {
         stakeMin,
       );
 
+      // Sync stake field function
       const syncStakeField = (block: any): void => {
         if (!block) return;
         this.updateNumberFieldBounds(block, "STAKE", {
@@ -2295,6 +2331,7 @@ class BotBuilderApp {
         });
       };
 
+      // Sync unit field function
       const syncUnitField = (block: any): string | null => {
         if (!block) return null;
         return this.updateDropdownFieldOptions(
@@ -2306,6 +2343,7 @@ class BotBuilderApp {
         );
       };
 
+      // Sync duration field function
       const syncDurationField = (block: any, unitValue: string | null): void => {
         if (!block) return;
         const nextUnit = allowedUnits.includes(unitValue ?? "") ? (unitValue as string) : resolvedUnit;
@@ -2321,6 +2359,7 @@ class BotBuilderApp {
         });
       };
 
+      // Execute sync functions
       if (executionSettingsBlock) {
         syncStakeField(executionSettingsBlock);
         const unitValue = syncUnitField(executionSettingsBlock);
@@ -2340,6 +2379,7 @@ class BotBuilderApp {
         syncDurationField(executionDurationBlock, unitValue);
       }
 
+      // Single Barrier
       if (barrierBlock && isSingleBarrier) {
         const direction = safeString(executionDefaults?.barrier_direction ?? "positive").toLowerCase();
         const { min: barrierMinAbs, max: barrierMaxAbs } = this.getSingleBarrierBounds(executionDefaults);
@@ -2360,6 +2400,7 @@ class BotBuilderApp {
         });
       }
 
+      // Double Barrier
       if (barrierLowBlock && barrierHighBlock && isDoubleBarrier) {
         const { lowMin, lowMax, highMin, highMax } = this.getDoubleBarrierBounds(executionDefaults);
         const barrierLowDefault = this.clampNumber(executionDefaults?.barrier_low_default ?? -0.486, lowMin, lowMax, -0.486);
@@ -2378,6 +2419,7 @@ class BotBuilderApp {
         });
       }
 
+      // Digit Target
       if (digitTargetBlock && isDigitTarget) {
         const currentOperator = safeString(digitTargetBlock.getFieldValue("DIGIT_OPERATOR") ?? "MATCHES") || "MATCHES";
         const operatorOptions = [
@@ -2406,6 +2448,7 @@ class BotBuilderApp {
         });
       }
 
+      // Digit Range
       if (digitRangeBlock && isDigitRange) {
         const usingBarrierDefaults = isDoubleBarrier;
         const digitRangeBounds = this.getDigitRangeBounds(executionDefaults, usingBarrierDefaults);
@@ -2424,6 +2467,7 @@ class BotBuilderApp {
       }
 
       if (visibleChanged) {
+        // Re-position and reconnect all blocks in execution section
         this.placeSectionBlocks("execution");
         try {
           this.workspace.render();
@@ -2476,6 +2520,8 @@ class BotBuilderApp {
     return { symbol, contractTypes };
   }
 
+  // In app.ts - update normalizeProposalDefaultsRecord
+
   private normalizeProposalDefaultsRecord(value: unknown): ProposalDefaultsRecord | null {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
@@ -2511,8 +2557,8 @@ class BotBuilderApp {
       barrier_direction: safeString(record.barrier_direction ?? ""),
       barrier_max: this.toFiniteNumber(record.barrier_max) ?? undefined,
       barrier_min: this.toFiniteNumber(record.barrier_min) ?? undefined,
-      barrier_low_default: this.toFiniteNumber(record.barrier_low_default) ?? undefined,
       barrier_high_default: this.toFiniteNumber(record.barrier_high_default) ?? undefined,
+      barrier_low_default: this.toFiniteNumber(record.barrier_low_default) ?? undefined,
       digit_target_min: this.toFiniteNumber(record.digit_target_min) ?? undefined,
       digit_target_max: this.toFiniteNumber(record.digit_target_max) ?? undefined,
       default_digit_target: this.toFiniteNumber(record.default_digit_target) ?? undefined,
@@ -3526,40 +3572,73 @@ class BotBuilderApp {
     const sectionBlock = this.findBlockByType(getSectionBlockType(sectionId));
     if (!sectionBlock) return;
 
-    const blocks = [
+    // Get all blocks in this section
+    let blocks = [
       ...this.collectSectionBlocksByType(sectionId),
       ...extraBlocks,
     ].filter((block, index, array) => array.findIndex((candidate) => candidate.id === block.id) === index);
 
-    this.placeBlockWithinSection(sectionBlock, blocks, sectionId);
-    this.connectSectionBlocks(sectionId, blocks.filter((block) => this.isBlockVisible(block)));
+    // Sort blocks - execution_settings first, then others by order
+    blocks = blocks.sort((left, right) => {
+      const leftTemplate = BLOCK_TEMPLATES_BY_TYPE.get(left.type);
+      const rightTemplate = BLOCK_TEMPLATES_BY_TYPE.get(right.type);
+      
+      // execution_settings should always be at the top
+      if (left.type === "execution_settings") return -1;
+      if (right.type === "execution_settings") return 1;
+      
+      // Then order by the template order
+      return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
+    });
+
+    // Filter visible blocks - CRITICAL: Only include blocks that are visible
+    const visibleBlocks = blocks.filter((block) => {
+      const isVisible = this.isBlockVisible(block);
+      return isVisible;
+    });
+
+    if (visibleBlocks.length === 0) return;
+
+    // Position blocks
+    this.placeBlockWithinSection(sectionBlock, visibleBlocks, sectionId);
+    
+    // Connect blocks in chain (execution_settings -> barrier -> digit)
+    this.connectSectionBlocks(sectionId, visibleBlocks);
   }
 
   private placeBlockWithinSection(sectionBlock: any, blocks: any[], sectionId: SectionId): void {
+    if (blocks.length === 0) return;
+
     const anchor = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
     const startX = anchor.x + 248;
     const startY = anchor.y + 60;
-    const rowGap =
-      sectionId === "market" ? 80 :
-      sectionId === "execution" ? 88 :
-      100;
+    
+    // Define which blocks should be at the top of the section
+    const topBlocks = ["execution_settings", "market_settings"];
+    
+    // Sort blocks: top blocks first, then by order
+    const sortedBlocks = blocks.slice().sort((left, right) => {
+      const leftIsTop = topBlocks.includes(left.type);
+      const rightIsTop = topBlocks.includes(right.type);
+      
+      if (leftIsTop && !rightIsTop) return -1;
+      if (!leftIsTop && rightIsTop) return 1;
+      
+      const leftTemplate = BLOCK_TEMPLATES_BY_TYPE.get(left.type);
+      const rightTemplate = BLOCK_TEMPLATES_BY_TYPE.get(right.type);
+      return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
+    });
 
-    blocks
-      .slice()
-      .sort((left, right) => {
-        const leftTemplate = BLOCK_TEMPLATES_BY_TYPE.get(left.type);
-        const rightTemplate = BLOCK_TEMPLATES_BY_TYPE.get(right.type);
-        return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
-      })
-      .forEach((block, index) => {
-        const x = startX;
-        const y = startY + index * rowGap;
+    // Position blocks vertically with consistent spacing
+    sortedBlocks.forEach((block, index) => {
+      const x = startX;
+      const y = startY + index * 88; // Consistent spacing
 
-        if (typeof block.moveBy === "function") {
-          const current = block.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
-          block.moveBy(x - current.x, y - current.y);
-        }
-      });
+      if (typeof block.moveBy === "function") {
+        const current = block.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
+        block.moveBy(x - current.x, y - current.y);
+      }
+    });
   }
 
   private chainSectionBlocks(blocks: any[]): void {
@@ -3593,24 +3672,53 @@ class BotBuilderApp {
     const stackConnection = sectionBlock?.getInput("STACK")?.connection;
     if (!sectionBlock || !stackConnection || blocks.length === 0) return;
 
+    // Sort blocks to ensure correct order - execution_settings first
     const orderedBlocks = blocks.slice().sort((left, right) => {
       const leftTemplate = BLOCK_TEMPLATES_BY_TYPE.get(left.type);
       const rightTemplate = BLOCK_TEMPLATES_BY_TYPE.get(right.type);
+      
+      // execution_settings first
+      if (left.type === "execution_settings") return -1;
+      if (right.type === "execution_settings") return 1;
+      
       return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
     });
 
+    // Filter visible blocks
     const visibleBlocks = orderedBlocks.filter((block) => this.isBlockVisible(block));
     if (visibleBlocks.length === 0) return;
 
+    // Disconnect any existing connections from the section
     if (stackConnection.isConnected()) {
       stackConnection.disconnect();
     }
-    if (visibleBlocks[0]?.previousConnection?.isConnected?.()) {
-      visibleBlocks[0].previousConnection.disconnect();
+
+    // Connect the first block to the section
+    const firstBlock = visibleBlocks[0];
+    if (firstBlock?.previousConnection) {
+      if (firstBlock.previousConnection.isConnected()) {
+        firstBlock.previousConnection.disconnect();
+      }
+      stackConnection.connect(firstBlock.previousConnection);
     }
 
-    stackConnection.connect(visibleBlocks[0].previousConnection);
-    this.chainSectionBlocks(visibleBlocks);
+    // Chain the remaining blocks
+    for (let index = 0; index < visibleBlocks.length - 1; index += 1) {
+      const current = visibleBlocks[index];
+      const next = visibleBlocks[index + 1];
+      
+      if (current?.nextConnection && next?.previousConnection) {
+        // Disconnect existing connections
+        if (current.nextConnection.isConnected()) {
+          current.nextConnection.disconnect();
+        }
+        if (next.previousConnection.isConnected()) {
+          next.previousConnection.disconnect();
+        }
+        // Connect current to next
+        current.nextConnection.connect(next.previousConnection);
+      }
+    }
   }
 
   private findBlockByType(type: string): any | null {

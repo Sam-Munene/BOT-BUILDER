@@ -240,22 +240,6 @@ export class ValidationService {
   }
 
   /**
-   * Check if contract type requires barrier
-   */
-  private requiresBarrier(contractType: string): boolean {
-    const barrierTypes = ['HIGH', 'LOW', 'KNOCK_IN', 'KNOCK_OUT'];
-    return barrierTypes.includes(contractType);
-  }
-
-  /**
-   * Check if contract type requires double barrier
-   */
-  private requiresDoubleBarrier(contractType: string): boolean {
-    const barrierTypes = ['ENDS_BETWEEN', 'ENDS_OUTSIDE', 'STAYS_IN', 'STAYS_OUT'];
-    return barrierTypes.includes(contractType);
-  }
-
-  /**
    * Check if contract type requires digit target
    */
   private requiresDigit(contractType: string): boolean {
@@ -272,8 +256,26 @@ export class ValidationService {
   }
 
   /**
+   * Check if contract type requires barrier (single barrier)
+   */
+  private requiresBarrier(contractType: string): boolean {
+    const barrierTypes = ['HIGH', 'LOW', 'KNOCK_IN', 'KNOCK_OUT'];
+    return barrierTypes.includes(contractType);
+  }
+
+  /**
+   * Check if contract type requires double barrier
+   */
+  private requiresDoubleBarrier(contractType: string): boolean {
+    const barrierTypes = ['ENDS_BETWEEN', 'ENDS_OUTSIDE', 'STAYS_IN', 'STAYS_OUT'];
+    return barrierTypes.includes(contractType);
+  }
+
+  /**
    * Validate strategy JSON before sending to API
    */
+  // In validation.ts - update validateApiPayload
+
   validateApiPayload(payload: any): ApiValidationResult {
     const required = ['request', 'symbol', 'contract_type', 'stake', 'duration', 'duration_unit'];
     const missing = required.filter(field => !payload[field]);
@@ -285,29 +287,35 @@ export class ValidationService {
       };
     }
 
-    // Validate barrier fields based on contract type
     const contractType = payload.contract_type;
     const errors: string[] = [];
 
-    if (this.requiresBarrier(contractType) && payload.barrier === undefined) {
-      errors.push(`Barrier is required for ${contractType}`);
+    // Validate barrier fields based on contract type
+    if (this.requiresBarrier(contractType)) {
+      if (payload.barrier === undefined || payload.barrier === null) {
+        errors.push(`Barrier is required for ${contractType}`);
+      }
     }
 
     if (this.requiresDoubleBarrier(contractType)) {
       if (payload.barrier_low === undefined || payload.barrier_high === undefined) {
         errors.push(`Double barrier is required for ${contractType}`);
       }
-      if (payload.barrier_low !== undefined && payload.barrier_high !== undefined && payload.barrier_low >= payload.barrier_high) {
-        errors.push('Lower barrier must be less than upper barrier');
+      if (payload.barrier_low !== undefined && payload.barrier_high !== undefined) {
+        if (payload.barrier_low >= payload.barrier_high) {
+          errors.push('Lower barrier must be less than upper barrier');
+        }
       }
     }
 
-    if (this.requiresDigit(contractType) && payload.digit_target === undefined) {
-      errors.push(`Digit target is required for ${contractType}`);
-    }
-    if (this.requiresDigit(contractType) && payload.digit_target !== undefined) {
-      if (payload.digit_target < 0 || payload.digit_target > 9) {
-        errors.push('Digit target must be between 0 and 9');
+    if (this.requiresDigit(contractType)) {
+      if (payload.digit_target === undefined || payload.digit_target === null) {
+        errors.push(`Digit target is required for ${contractType}`);
+      }
+      if (payload.digit_target !== undefined) {
+        if (payload.digit_target < 0 || payload.digit_target > 9) {
+          errors.push('Digit target must be between 0 and 9');
+        }
       }
     }
 

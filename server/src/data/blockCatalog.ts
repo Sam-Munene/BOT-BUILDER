@@ -175,6 +175,8 @@ export const DURATION_UNIT_OPTIONS: FieldOption[] = [
   { label: "Ticks", value: "t" },
   { label: "Seconds", value: "s" },
   { label: "Minutes", value: "m" },
+  { label: "Hours", value: "h" },
+  { label: "Days", value: "d" },
 ];
 
 export const BOOLEAN_RADIO_OPTIONS: FieldOption[] = [
