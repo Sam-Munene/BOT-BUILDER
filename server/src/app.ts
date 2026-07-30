@@ -11,7 +11,7 @@ import {
   type FieldDefinition,
 } from "./data/blockCatalog";
 
-type SectionId = "market" | "execution" | "indicators" | "conditions" | "restart" | "utility";
+type SectionId = "market" | "execution" | "indicators" | "conditions" | "restart";
 
 type SerializedBlock = {
   type: string;
@@ -35,17 +35,15 @@ type StrategySnapshot = {
   execution: Record<string, unknown> | null;
   indicators: Array<Record<string, unknown>>;
   conditions: {
-    purchase: Record<string, unknown> | null;
-    sell: Record<string, unknown> | null;
-    logic: Array<Record<string, unknown>>;
+    entry: Record<string, unknown> | null;
+    exit: Record<string, unknown> | null;
+    management: Record<string, unknown> | null;  // Martingale settings
+    variables: Array<Record<string, unknown>>;   // All variable blocks
+    notifications: Record<string, unknown> | null;
+    stats: Array<Record<string, unknown>>;
   };
   restart: {
-    onWin: Record<string, unknown> | null;
-    onLoss: Record<string, unknown> | null;
-  };
-  utility: {
-    variables: Array<Record<string, unknown>>;
-    snapshot: Record<string, unknown> | null;
+    condition: Record<string, unknown> | null;
   };
   sections: SectionSnapshot[];
   apiPayload: Record<string, unknown> | null;
@@ -129,7 +127,6 @@ const SECTION_INPUT_NAMES: Record<SectionId, string> = {
   indicators: "INDICATORS",
   conditions: "CONDITIONS",
   restart: "RESTART",
-  utility: "UTILITY",
 };
 
 const SECTION_BLOCK_TYPES: Record<SectionId, string> = {
@@ -138,7 +135,6 @@ const SECTION_BLOCK_TYPES: Record<SectionId, string> = {
   indicators: "indicators_section",
   conditions: "conditions_section",
   restart: "restart_section",
-  utility: "utility_section",
 };
 
 const DEFAULT_SYMBOL = "VIX_100";
@@ -295,7 +291,6 @@ function buildTemplateJson(template: BlockTemplate): any {
     const indicatorsInput = { type: "input_statement", name: getSectionInputName("indicators") };
     const conditionsInput = { type: "input_statement", name: getSectionInputName("conditions") };
     const restartInput = { type: "input_statement", name: getSectionInputName("restart") };
-    const utilityInput = { type: "input_statement", name: getSectionInputName("utility") };
 
     return {
       message0: template.title,
@@ -303,8 +298,8 @@ function buildTemplateJson(template: BlockTemplate): any {
       args1: [marketInput, executionInput],
       message2: "Indicators %1  Conditions %2",
       args2: [indicatorsInput, conditionsInput],
-      message3: "Restart %1  Utility %2",
-      args3: [restartInput, utilityInput],
+      message3: "Restart %1",
+      args3: [restartInput],
       colour: template.color,
       hat: "cap",
       inputsInline: true,
@@ -479,6 +474,80 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
     };
   }
 
+  // Parse condition blocks - with safety checks
+  const entryCondition = firstBlockByType(blocks, "condition_entry");
+  const exitCondition = firstBlockByType(blocks, "condition_exit");
+  const martingaleSettings = firstBlockByType(blocks, "martingale_settings");
+  const notificationSettings = firstBlockByType(blocks, "notification_setting");
+
+  // Collect all variable blocks
+  const variableBlocks = blocks.filter(
+    (block) => block.type === "variable_bool" || 
+                block.type === "variable_number" || 
+                block.type === "variable_text"
+  );
+
+  const statsBlocks = blocks.filter((block) => block.type === "strategy_stats");
+
+  // Build conditions object with safety checks
+  result.conditions = {
+    entry: entryCondition ? {
+      condition: safeString(entryCondition.values?.CONDITION ?? "ALWAYS"),
+      value: safeString(entryCondition.values?.VALUE ?? ""),
+      value2: safeString(entryCondition.values?.VALUE_2 ?? ""),
+    } : null,
+    
+    exit: exitCondition ? {
+      condition: safeString(exitCondition.values?.CONDITION ?? "SELL_BY_COUNT_DOWN"),
+      value: safeString(exitCondition.values?.VALUE ?? ""),
+    } : null,
+    
+    management: martingaleSettings ? {
+      initialStake: asNumber(martingaleSettings.values?.INITIAL_STAKE ?? 10, 10),
+      multiplier: asNumber(martingaleSettings.values?.MULTIPLIER ?? 2, 2),
+      maxStake: asNumber(martingaleSettings.values?.MAX_STAKE ?? 50, 50),
+      profitThreshold: asNumber(martingaleSettings.values?.PROFIT_THRESHOLD ?? 100, 100),
+      lossThreshold: asNumber(martingaleSettings.values?.LOSS_THRESHOLD ?? 50, 50),
+      tradeAgain: asBoolean(martingaleSettings.values?.TRADE_AGAIN ?? true),
+    } : null,
+    
+    variables: variableBlocks.map((block) => {
+      if (block.type === "variable_bool") {
+        return {
+          type: "bool",
+          name: safeString(block.values?.VAR_NAME ?? ""),
+          value: asBoolean(block.values?.VAR_VALUE ?? false),
+        };
+      } else if (block.type === "variable_number") {
+        return {
+          type: "number",
+          name: safeString(block.values?.VAR_NAME ?? ""),
+          value: asNumber(block.values?.VAR_VALUE ?? 0, 0),
+        };
+      } else if (block.type === "variable_text") {
+        return {
+          type: "text",
+          name: safeString(block.values?.VAR_NAME ?? ""),
+          value: safeString(block.values?.VAR_VALUE ?? ""),
+        };
+      }
+      return null;
+    }).filter(Boolean),
+    
+    notifications: notificationSettings ? {
+      notifyStake: asBoolean(notificationSettings.values?.NOTIFY_STAKE ?? true),
+      notifyLoss: asBoolean(notificationSettings.values?.NOTIFY_LOSS ?? true),
+      notifyProfit: asBoolean(notificationSettings.values?.NOTIFY_PROFIT ?? true),
+      notifyTrade: asBoolean(notificationSettings.values?.NOTIFY_TRADE ?? true),
+    } : null,
+    
+    stats: statsBlocks.map((block) => ({
+      name: safeString(block.values?.STAT_NAME ?? ""),
+      type: safeString(block.values?.STAT_TYPE ?? "number"),
+      initialValue: safeString(block.values?.INITIAL_VALUE ?? "0"),
+    })),
+  };
+
   const indicatorRule = firstBlockByType(blocks, "indicator_rule");
   const indicatorCompare = firstBlockByType(blocks, "indicator_compare");
   const indicatorsSettings = firstBlockByType(blocks, "indicators_settings");
@@ -517,121 +586,29 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
 
   result.indicators = indicators;
 
-  const purchaseCondition = firstBlockByType(blocks, "purchase_condition");
-  const sellCondition = firstBlockByType(blocks, "sell_condition");
-  const logicGate = firstBlockByType(blocks, "logic_gate");
-  const conditionsSettings = firstBlockByType(blocks, "conditions_settings");
 
-  result.conditions = conditionsSettings
-    ? {
-        purchase: {
-          type: safeString(conditionsSettings.values.PURCHASE_TRIGGER ?? "ALWAYS"),
-          value: safeString(conditionsSettings.values.PURCHASE_VALUE ?? ""),
-          invert: asBoolean(conditionsSettings.values.PURCHASE_INVERT ?? false),
-        },
-        sell: {
-          type: safeString(conditionsSettings.values.SELL_TRIGGER ?? "ALWAYS"),
-          value: safeString(conditionsSettings.values.SELL_VALUE ?? ""),
-          invert: asBoolean(conditionsSettings.values.SELL_INVERT ?? false),
-        },
-        logic: [
-          {
-            operator: safeString(conditionsSettings.values.LOGIC_OPERATOR ?? "AND"),
-            negate: asBoolean(conditionsSettings.values.LOGIC_NEGATE ?? false),
-          },
-        ],
-      }
-    : {
-        purchase: purchaseCondition
-          ? {
-              type: safeString(purchaseCondition.values.TRIGGER ?? "ALWAYS"),
-              value: safeString(purchaseCondition.values.VALUE ?? ""),
-              invert: asBoolean(purchaseCondition.values.INVERT ?? false),
-            }
-          : null,
-        sell: sellCondition
-          ? {
-              type: safeString(sellCondition.values.TRIGGER ?? "ALWAYS"),
-              value: safeString(sellCondition.values.VALUE ?? ""),
-              invert: asBoolean(sellCondition.values.INVERT ?? false),
-            }
-          : null,
-        logic: logicGate
-          ? [
-              {
-                operator: safeString(logicGate.values.OPERATOR ?? "AND"),
-                negate: asBoolean(logicGate.values.NEGATE ?? false),
-              },
-            ]
-          : [],
-      };
-
-  const restartOnWin = firstBlockByType(blocks, "restart_on_win");
-  const restartOnLoss = firstBlockByType(blocks, "restart_on_loss");
+  const restartWhen = firstBlockByType(blocks, "restart_when");
   const restartSettings = firstBlockByType(blocks, "restart_settings");
 
-  result.restart = restartSettings
-    ? {
-        onWin: {
-          resetStake: asNumber(restartSettings.values.WIN_RESET_STAKE ?? 10, 10),
-          enabled: asBoolean(restartSettings.values.WIN_ENABLE ?? true),
-        },
-        onLoss: {
-          resetStake: asNumber(restartSettings.values.LOSS_RESET_STAKE ?? 10, 10),
-          enabled: asBoolean(restartSettings.values.LOSS_ENABLE ?? true),
-        },
-      }
-    : {
-        onWin: restartOnWin
-          ? {
-              resetStake: asNumber(restartOnWin.values.RESET_STAKE ?? 10, 10),
-              enabled: asBoolean(restartOnWin.values.ENABLE ?? true),
-            }
-          : null,
-        onLoss: restartOnLoss
-          ? {
-              resetStake: asNumber(restartOnLoss.values.RESET_STAKE ?? 10, 10),
-              enabled: asBoolean(restartOnLoss.values.ENABLE ?? true),
-            }
-          : null,
-      };
+  // Build restart object
+  result.restart = {
+    condition: restartWhen ? {
+      type: safeString(restartWhen.values.CONDITION ?? "AFTER_LOSS"),
+    } : (restartSettings ? {
+      type: safeString(restartSettings.values.CONDITION ?? "AFTER_LOSS"),
+    } : null),
+  };
 
-  const variables = blocks
-    .filter((block) => block.type === "set_variable")
-    .map((block) => ({
-      name: safeString(block.values.VAR_NAME ?? ""),
-      value: safeString(block.values.VAR_VALUE ?? ""),
-      persistent: asBoolean(block.values.PERSIST ?? false),
-    }));
-  const utilitySettings = firstBlockByType(blocks, "utility_settings");
+    const variables = blocks
+      .filter((block) => block.type === "set_variable")
+      .map((block) => ({
+        name: safeString(block.values.VAR_NAME ?? ""),
+        value: safeString(block.values.VAR_VALUE ?? ""),
+        persistent: asBoolean(block.values.PERSIST ?? false),
+      }));
 
-  result.utility = utilitySettings
-    ? {
-        variables: [
-          {
-            name: safeString(utilitySettings.values.VAR_NAME ?? ""),
-            value: safeString(utilitySettings.values.VAR_VALUE ?? ""),
-            persistent: asBoolean(utilitySettings.values.PERSIST ?? false),
-          },
-        ],
-        snapshot: {
-          scope: safeString(utilitySettings.values.SNAPSHOT_SCOPE ?? "full"),
-          includeMeta: asBoolean(utilitySettings.values.INCLUDE_META ?? true),
-        },
-      }
-    : {
-        variables,
-        snapshot: firstBlockByType(blocks, "strategy_snapshot")
-          ? {
-              // snapshotName: safeString(firstBlockByType(blocks, "strategy_snapshot")?.values.SNAPSHOT_NAME ?? "Strategy Snapshot"),
-              scope: safeString(firstBlockByType(blocks, "strategy_snapshot")?.values.SNAPSHOT_SCOPE ?? "full"),
-              includeMeta: asBoolean(firstBlockByType(blocks, "strategy_snapshot")?.values.INCLUDE_META ?? true),
-            }
-          : null,
-      };
-
-  return result;
-}
+    return result;
+  }
 
 function createApiPayload(strategy: StrategySnapshot): Record<string, unknown> | null {
   if (!strategy.market || !strategy.execution) return null;
@@ -3563,8 +3540,8 @@ class BotBuilderApp {
     const startX = anchor.x + 248;
     const startY = anchor.y + 60;
     const rowGap =
-      sectionId === "market" ? 108 :
-      sectionId === "execution" ? 122 :
+      sectionId === "market" ? 80 :
+      sectionId === "execution" ? 88 :
       100;
 
     blocks
@@ -3591,7 +3568,13 @@ class BotBuilderApp {
     for (let index = 0; index < blocks.length - 1; index += 1) {
       const current = blocks[index];
       const next = blocks[index + 1];
-      if (current?.nextConnection && next?.previousConnection && !current.nextConnection.isConnected()) {
+      if (current?.nextConnection && next?.previousConnection) {
+        if (current.nextConnection.isConnected()) {
+          current.nextConnection.disconnect();
+        }
+        if (next.previousConnection.isConnected()) {
+          next.previousConnection.disconnect();
+        }
         current.nextConnection.connect(next.previousConnection);
       }
     }
@@ -3621,6 +3604,9 @@ class BotBuilderApp {
 
     if (stackConnection.isConnected()) {
       stackConnection.disconnect();
+    }
+    if (visibleBlocks[0]?.previousConnection?.isConnected?.()) {
+      visibleBlocks[0].previousConnection.disconnect();
     }
 
     stackConnection.connect(visibleBlocks[0].previousConnection);
@@ -3664,21 +3650,25 @@ class BotBuilderApp {
       this.workspace.clear();
     }
 
+    // Check if workspace has blocks, if so skip seeding
     if (this.workspace.getAllBlocks(false).length > 0) {
       return;
     }
 
     Blockly.Events.disable();
     try {
+      // First, ensure all blocks are registered
+      this.registerBlocks();
+
       const sections: Array<{ id: SectionId; blocks: any[]; height: number }> = [];
 
+      // Section heights - updated order: Market → Execution → Conditions → Indicators → Restart
       for (const section of [
-        { id: "market", height: 660 },
-        { id: "execution", height: 880 },
-        { id: "indicators", height: 560 },
-        { id: "conditions", height: 560 },
-        { id: "restart", height: 440 },
-        { id: "utility", height: 440 },
+        { id: "market", height: 200 },
+        { id: "execution", height: 400 },
+        { id: "conditions", height: 600 },
+        { id: "indicators", height: 100 },
+        { id: "restart", height: 100 },
       ] as Array<{ id: SectionId; height: number }>) {
         const sectionBlock = this.workspace.newBlock(getSectionBlockType(section.id));
         sectionBlock.initSvg();
@@ -3687,70 +3677,132 @@ class BotBuilderApp {
       }
 
       if (includeStarterBlocks) {
-        const marketSettingsBlock = this.workspace.newBlock("market_settings");
-        marketSettingsBlock.initSvg();
-        marketSettingsBlock.render();
-        this.updateDropdownFieldOptions(marketSettingsBlock, "SYMBOL", [], liveSymbol, liveSymbol);
-        this.updateDropdownFieldOptions(
-          marketSettingsBlock,
-          "CONTRACT_CATEGORY",
-          [],
-          "__loading_contract_categories__",
-          "Loading contract categories from server...",
-        );
-        this.updateDropdownFieldOptions(marketSettingsBlock, "CONTRACT_TYPE", [], "UP", "UP");
-        // marketSettingsBlock.setFieldValue("TRUE", "LIVE_SYNC");
-        this.selectedContractCategory = "__loading_contract_categories__";
-        this.selectedContractType = "UP";
+        // ===== 1. MARKET BLOCKS =====
+        const marketSettingsBlock = this.safeCreateBlock("market_settings");
+        if (marketSettingsBlock) {
+          this.updateDropdownFieldOptions(marketSettingsBlock, "SYMBOL", [], liveSymbol, liveSymbol);
+          this.updateDropdownFieldOptions(
+            marketSettingsBlock,
+            "CONTRACT_CATEGORY",
+            [],
+            "__loading_contract_categories__",
+            "Loading contract categories from server...",
+          );
+          this.updateDropdownFieldOptions(marketSettingsBlock, "CONTRACT_TYPE", [], "UP", "UP");
+          this.selectedContractCategory = "__loading_contract_categories__";
+          this.selectedContractType = "UP";
+          sections[0].blocks = [marketSettingsBlock];
+        }
 
-        const executionSettingsBlock = this.workspace.newBlock("execution_settings");
-        executionSettingsBlock.initSvg();
-        executionSettingsBlock.render();
-        executionSettingsBlock.setFieldValue("0.5", "STAKE");
-        executionSettingsBlock.setFieldValue("5", "DURATION");
-        executionSettingsBlock.setFieldValue("t", "DURATION_UNIT");
-        // executionSettingsBlock.setFieldValue("TRUE", "AUTO_RETRY");
+        // ===== 2. EXECUTION BLOCKS =====
+        const executionSettingsBlock = this.safeCreateBlock("execution_settings");
+        if (executionSettingsBlock) {
+          executionSettingsBlock.setFieldValue("0.5", "STAKE");
+          executionSettingsBlock.setFieldValue("5", "DURATION");
+          executionSettingsBlock.setFieldValue("t", "DURATION_UNIT");
+          sections[1].blocks = [executionSettingsBlock];
+        }
 
-        const indicatorsSettingsBlock = this.workspace.newBlock("indicators_settings");
-        indicatorsSettingsBlock.initSvg();
-        indicatorsSettingsBlock.render();
-        this.updateDropdownFieldOptions(indicatorsSettingsBlock, "SYMBOL", [], liveSymbol, liveSymbol);
+        // ===== 3. CONDITION BLOCKS =====
+        const conditionsBlocks: any[] = [];
 
-        const conditionsSettingsBlock = this.workspace.newBlock("conditions_settings");
-        conditionsSettingsBlock.initSvg();
-        conditionsSettingsBlock.render();
+        // 3a. Entry Condition
+        const entryConditionBlock = this.safeCreateBlock("condition_entry");
+        if (entryConditionBlock) {
+          entryConditionBlock.setFieldValue("ALWAYS", "CONDITION");
+          entryConditionBlock.setFieldValue("", "VALUE");
+          entryConditionBlock.setFieldValue("", "VALUE_2");
+          conditionsBlocks.push(entryConditionBlock);
+        }
 
-        const restartSettingsBlock = this.workspace.newBlock("restart_settings");
-        restartSettingsBlock.initSvg();
-        restartSettingsBlock.render();
+        // 3b. Exit Condition
+        const exitConditionBlock = this.safeCreateBlock("condition_exit");
+        if (exitConditionBlock) {
+          exitConditionBlock.setFieldValue("SELL_BY_COUNT_DOWN", "CONDITION");
+          exitConditionBlock.setFieldValue("5", "VALUE");
+          conditionsBlocks.push(exitConditionBlock);
+        }
 
-        const utilitySettingsBlock = this.workspace.newBlock("utility_settings");
-        utilitySettingsBlock.initSvg();
-        utilitySettingsBlock.render();
-        this.syncSymbolDropdowns();
+        // 3c. Martingale Settings
+        const martingaleBlock = this.safeCreateBlock("martingale_settings");
+        if (martingaleBlock) {
+          martingaleBlock.setFieldValue("10", "INITIAL_STAKE");
+          martingaleBlock.setFieldValue("2", "MULTIPLIER");
+          martingaleBlock.setFieldValue("50", "MAX_STAKE");
+          martingaleBlock.setFieldValue("100", "PROFIT_THRESHOLD");
+          martingaleBlock.setFieldValue("50", "LOSS_THRESHOLD");
+          martingaleBlock.setFieldValue("TRUE", "TRADE_AGAIN");
+          conditionsBlocks.push(martingaleBlock);
+        }
 
-        const marketBlocks = [marketSettingsBlock];
-        const executionBlocks = [executionSettingsBlock];
-        const indicatorsBlocks = [indicatorsSettingsBlock];
-        const conditionsBlocks = [conditionsSettingsBlock];
-        const restartBlocks = [restartSettingsBlock];
-        const utilityBlocks = [utilitySettingsBlock];
-        sections[0].blocks = marketBlocks;
-        sections[1].blocks = executionBlocks;
-        sections[2].blocks = indicatorsBlocks;
-        sections[3].blocks = conditionsBlocks;
-        sections[4].blocks = restartBlocks;
-        sections[5].blocks = utilityBlocks;
+        // 3d. Boolean Variable - isBought
+        const boolVarBlock = this.safeCreateBlock("variable_bool");
+        if (boolVarBlock) {
+          boolVarBlock.setFieldValue("isBought", "VAR_NAME");
+          boolVarBlock.setFieldValue("FALSE", "VAR_VALUE");
+          conditionsBlocks.push(boolVarBlock);
+        }
+
+        // 3e. Number Variable - currentStake
+        const numVarBlock = this.safeCreateBlock("variable_number");
+        if (numVarBlock) {
+          numVarBlock.setFieldValue("currentStake", "VAR_NAME");
+          numVarBlock.setFieldValue("10", "VAR_VALUE");
+          conditionsBlocks.push(numVarBlock);
+        }
+
+        // 3f. Text Variable - notification
+        const textVarBlock = this.safeCreateBlock("variable_text");
+        if (textVarBlock) {
+          textVarBlock.setFieldValue("notification", "VAR_NAME");
+          textVarBlock.setFieldValue("Trade executed", "VAR_VALUE");
+          conditionsBlocks.push(textVarBlock);
+        }
+
+        // 3g. Notification Settings
+        const notificationBlock = this.safeCreateBlock("notification_setting");
+        if (notificationBlock) {
+          notificationBlock.setFieldValue("TRUE", "NOTIFY_STAKE");
+          notificationBlock.setFieldValue("TRUE", "NOTIFY_LOSS");
+          notificationBlock.setFieldValue("TRUE", "NOTIFY_PROFIT");
+          notificationBlock.setFieldValue("TRUE", "NOTIFY_TRADE");
+          conditionsBlocks.push(notificationBlock);
+        }
+
+        // 3h. Strategy Stats - totalProfit
+        const statsBlock = this.safeCreateBlock("strategy_stats");
+        if (statsBlock) {
+          statsBlock.setFieldValue("totalProfit", "STAT_NAME");
+          statsBlock.setFieldValue("number", "STAT_TYPE");
+          statsBlock.setFieldValue("0", "INITIAL_VALUE");
+          conditionsBlocks.push(statsBlock);
+        }
+
+        sections[2].blocks = conditionsBlocks;
+
+        // ===== 4. INDICATORS BLOCKS =====
+        const indicatorsSettingsBlock = this.safeCreateBlock("indicators_settings");
+        if (indicatorsSettingsBlock) {
+          this.updateDropdownFieldOptions(indicatorsSettingsBlock, "SYMBOL", [], liveSymbol, liveSymbol);
+          sections[3].blocks = [indicatorsSettingsBlock];
+        }
+
+        // ===== 5. RESTART BLOCKS =====
+        const restartSettingsBlock = this.safeCreateBlock("restart_settings");
+        if (restartSettingsBlock) {
+          sections[4].blocks = [restartSettingsBlock];
+        }
       }
 
-      let yCursor = 116;
+      // Position sections vertically in the new order
+      let yCursor = 40;
       for (const section of sections) {
         const sectionBlock = this.findBlockByType(getSectionBlockType(section.id));
         if (sectionBlock) {
           const current = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
           sectionBlock.moveBy(72 - current.x, yCursor - current.y);
         }
-        if (includeStarterBlocks) {
+        if (includeStarterBlocks && section.blocks.length > 0) {
           this.placeSectionBlocks(section.id, section.blocks);
           this.connectSectionBlocks(section.id, section.blocks);
         }
@@ -3759,11 +3811,46 @@ class BotBuilderApp {
 
       this.normalizeAllSections();
       this.syncExecutionHelperVisibility();
+      
+      // Sync symbol dropdowns after seeding
+      this.syncSymbolDropdowns();
+      
+    } catch (error) {
+      console.error("Error seeding workspace:", error);
     } finally {
       Blockly.Events.enable();
     }
 
     this.workspace.scrollCenter();
+  }
+
+  /**
+   * Safely create a block, checking if it exists first
+   */
+  private safeCreateBlock(type: string): any | null {
+    try {
+      if (!this.workspace) return null;
+      
+      // Check if block type is registered
+      const Blockly = getBlockly();
+      if (!Blockly.Blocks[type]) {
+        console.warn(`Block type "${type}" is not registered. Skipping.`);
+        return null;
+      }
+      
+      const block = this.workspace.newBlock(type);
+      if (!block) {
+        console.warn(`Failed to create block type "${type}".`);
+        return null;
+      }
+      
+      block.initSvg();
+      block.render();
+      return block;
+    } catch (error) {
+      console.error(`Error creating block "${type}":`, error);
+      return null;
+    }
   }
 
   private buildSectionsSnapshot(): SectionSnapshot[] {
@@ -3791,17 +3878,15 @@ class BotBuilderApp {
       execution: (domain.execution as Record<string, unknown> | undefined) ?? null,
       indicators: (domain.indicators as Array<Record<string, unknown>> | undefined) ?? [],
       conditions: (domain.conditions as StrategySnapshot["conditions"] | undefined) ?? {
-        purchase: null,
-        sell: null,
-        logic: [],
+        entry: null,
+        exit: null,
+        management: null,
+        variables: [],
+        notifications: null,
+        stats: [],
       },
       restart: (domain.restart as StrategySnapshot["restart"] | undefined) ?? {
-        onWin: null,
-        onLoss: null,
-      },
-      utility: (domain.utility as StrategySnapshot["utility"] | undefined) ?? {
-        variables: [],
-        snapshot: null,
+        condition: null,
       },
       sections,
       apiPayload,
