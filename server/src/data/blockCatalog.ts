@@ -630,22 +630,22 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     sectionId: "execution",
     hiddenInPalette: true,
     fields: [
-      {
-        kind: "dropdown",
-        name: "DIGIT_OPERATOR",
-        label: "Operator",
-        defaultValue: "MATCHES",
-        options: [
-          { label: "Matches", value: "MATCHES" },
-          { label: "Differs", value: "DIFFERS" },
-          { label: "Even", value: "EVEN" },
-          { label: "Odd", value: "ODD" },
-          { label: "Over", value: "OVER" },
-          { label: "Under", value: "UNDER" },
-          { label: "Prime", value: "PRIME" },
-          { label: "Non Prime", value: "NON_PRIME" },
-        ],
-      },
+      // {
+      //   kind: "dropdown",
+      //   name: "DIGIT_OPERATOR",
+      //   label: "Operator",
+      //   defaultValue: "MATCHES",
+      //   options: [
+      //     { label: "Matches", value: "MATCHES" },
+      //     { label: "Differs", value: "DIFFERS" },
+      //     { label: "Even", value: "EVEN" },
+      //     { label: "Odd", value: "ODD" },
+      //     { label: "Over", value: "OVER" },
+      //     { label: "Under", value: "UNDER" },
+      //     { label: "Prime", value: "PRIME" },
+      //     { label: "Non Prime", value: "NON_PRIME" },
+      //   ],
+      // },
       {
         kind: "number",
         name: "DIGIT_TARGET",

@@ -2249,13 +2249,19 @@ class BotBuilderApp {
       const record = this.getContractTypeRecordForSymbol(symbol, contractType);
       const defaults = this.getProposalDefaultsRecordForSymbol(symbol, contractType);
       
-      // Define all needed variables
+      // ===== DECLARE BLOCK REFERENCES FIRST =====
+      const executionSettingsBlock = this.findBlockByType("execution_settings");
+      const executionStakeBlock = this.findBlockByType("execution_stake");
+      const executionUnitBlock = this.findBlockByType("execution_unit");
+      const executionDurationBlock = this.findBlockByType("execution_duration");
+      
+      // ===== NOW USE THEM =====
       const executionDefaults = defaults ?? null;
       const allowedUnits = executionDefaults?.allowed_units?.length ? executionDefaults.allowed_units : ["t"];
       const unitOptions = allowedUnits.map((unit) => ({ label: unit.toUpperCase(), value: unit }));
       const selectedUnitValue = safeString(
-        this.findBlockByType("execution_settings")?.getFieldValue("DURATION_UNIT") ??
-        this.findBlockByType("execution_unit")?.getFieldValue("DURATION_UNIT") ??
+        executionSettingsBlock?.getFieldValue("DURATION_UNIT") ??
+        executionUnitBlock?.getFieldValue("DURATION_UNIT") ??
         executionDefaults?.default_duration_unit ??
         allowedUnits[0] ??
         "t"
@@ -2266,14 +2272,8 @@ class BotBuilderApp {
       const selectedDurationLimits =
         executionDefaults?.duration_limits?.[resolvedUnit] ??
         executionDefaults?.duration_limits?.[executionDefaults?.default_duration_unit ?? "t"] ??
-        { min: 1, max: 15 };
-      
-      // Get block references
-      const executionSettingsBlock = this.findBlockByType("execution_settings");
-      const executionStakeBlock = this.findBlockByType("execution_stake");
-      const executionUnitBlock = this.findBlockByType("execution_unit");
-      const executionDurationBlock = this.findBlockByType("execution_duration");
-      
+        { min: 1, max: 100 };
+
       const barrierCount = record?.barriers ?? 0;
       const isSingleBarrier = barrierCount === 1 && this.getSingleBarrierContractTypes().has(contractType);
       const isDoubleBarrier = barrierCount === 2 && this.getDoubleBarrierContractTypes().has(contractType);
@@ -2334,16 +2334,24 @@ class BotBuilderApp {
       // Sync unit field function
       const syncUnitField = (block: any): string | null => {
         if (!block) return null;
-        return this.updateDropdownFieldOptions(
+        
+        // Get current value
+        const currentValue = safeString(block.getFieldValue("DURATION_UNIT"));
+        
+        // Update dropdown options to only allowed units
+        const result = this.updateDropdownFieldOptions(
           block,
           "DURATION_UNIT",
           unitOptions,
-          resolvedUnit,
+          // If current value is allowed, keep it, otherwise use resolved unit
+          unitOptions.some((opt) => opt.value === currentValue) ? currentValue : resolvedUnit,
           resolvedUnit.toUpperCase(),
+          false // Don't preserve current value if invalid
         );
+        
+        // If the current value was invalid, it will be set to resolvedUnit
+        return result ?? resolvedUnit;
       };
-
-      // Sync duration field function
       const syncDurationField = (block: any, unitValue: string | null): void => {
         if (!block) return;
         const nextUnit = allowedUnits.includes(unitValue ?? "") ? (unitValue as string) : resolvedUnit;
@@ -2351,11 +2359,21 @@ class BotBuilderApp {
           executionDefaults?.duration_limits?.[nextUnit] ??
           executionDefaults?.duration_limits?.[resolvedUnit] ??
           selectedDurationLimits;
+        
+        const currentValue = this.toFiniteNumber(block.getFieldValue("DURATION"));
+        const defaultVal = this.clampNumber(
+          executionDefaults?.default_duration ?? currentValue ?? nextLimits.min,
+          nextLimits.min,
+          nextLimits.max,
+          nextLimits.min
+        );
+        
+        // This applies the min/max bounds to the field - user can adjust within range
         this.updateNumberFieldBounds(block, "DURATION", {
           min: nextLimits.min,
           max: nextLimits.max,
           precision: 1,
-          defaultValue: this.clampNumber(executionDefaults?.default_duration ?? desiredDuration, nextLimits.min, nextLimits.max, desiredDuration),
+          defaultValue: defaultVal,
         });
       };
 
@@ -2674,7 +2692,10 @@ class BotBuilderApp {
     }
 
     const currentValue = safeString(block.getFieldValue(fieldName));
-    if (preserveCurrentValue && currentValue && currentValue !== preferredValue) {
+    
+    // Only preserve current value if it's in the new options
+    const isValidCurrent = options.some((opt) => opt.value === currentValue);
+    if (preserveCurrentValue && isValidCurrent && currentValue) {
       pushOption(currentValue, currentValue);
     }
 
@@ -2690,11 +2711,15 @@ class BotBuilderApp {
     fieldAny.generatedOptions = null;
 
     const validValues = new Set(normalizedOptions.map((option) => option[1]));
-    const nextValue = preferredValue && validValues.has(preferredValue)
-      ? preferredValue
-      : validValues.has(currentValue)
-        ? currentValue
-        : normalizedOptions[0][1];
+    let nextValue: string;
+    
+    if (preferredValue && validValues.has(preferredValue)) {
+      nextValue = preferredValue;
+    } else if (isValidCurrent && currentValue && validValues.has(currentValue)) {
+      nextValue = currentValue;
+    } else {
+      nextValue = normalizedOptions[0][1];
+    }
 
     if (nextValue !== currentValue) {
       block.setFieldValue(nextValue, fieldName);
@@ -2702,7 +2727,6 @@ class BotBuilderApp {
 
     return nextValue;
   }
-
   private clampNumber(value: unknown, min: number | null | undefined, max: number | null | undefined, fallback: number): number {
     const numeric = this.toFiniteNumber(value) ?? fallback;
     const nextMin = min ?? numeric;
@@ -2720,23 +2744,36 @@ class BotBuilderApp {
     if (!field) return null;
 
     const fieldAny = field as any;
+    
+    // Set the bounds on the field - this is what makes it adjustable
     if (bounds.min != null) fieldAny.min_ = bounds.min;
     if (bounds.max != null) fieldAny.max_ = bounds.max;
     if (bounds.precision != null) fieldAny.precision_ = bounds.precision;
-    if (bounds.defaultValue != null) fieldAny.value_ = bounds.defaultValue;
-
+    
+    // Get current value
     const currentValue = this.toFiniteNumber(block.getFieldValue(fieldName));
-    const nextValue = this.clampNumber(
-      currentValue ?? bounds.defaultValue ?? 0,
-      bounds.min,
-      bounds.max,
-      bounds.defaultValue ?? 0,
-    );
-
-    if (currentValue == null || nextValue !== currentValue) {
+    
+    // Calculate next value - use provided defaultValue or clamp current value
+    let nextValue: number;
+    if (bounds.defaultValue != null) {
+      nextValue = this.clampNumber(bounds.defaultValue, bounds.min, bounds.max, bounds.defaultValue);
+    } else if (currentValue != null) {
+      nextValue = this.clampNumber(currentValue, bounds.min, bounds.max, currentValue);
+    } else {
+      nextValue = bounds.min ?? 0;
+    }
+    
+    // Only update if value changed or field was unbound
+    if (currentValue == null || nextValue !== currentValue || fieldAny.value_ !== nextValue) {
+      fieldAny.value_ = nextValue;
       block.setFieldValue(String(nextValue), fieldName);
     }
-
+    
+    // Force the field to refresh its display
+    if (fieldAny.render_) {
+      fieldAny.render_();
+    }
+    
     return nextValue;
   }
 
