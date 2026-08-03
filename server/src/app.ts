@@ -3957,6 +3957,41 @@ class BotBuilderApp {
     }
   }
 
+  private isExecutionHelperBlockType(type: string): boolean {
+    return new Set([
+      "market_barrier",
+      "market_barrier_low",
+      "market_barrier_high",
+      "market_digits",
+      "market_range",
+    ]).has(type);
+  }
+
+  private placeExecutionHelperBlocks(sectionBlock: any, blocks: any[]): void {
+    if (!sectionBlock || blocks.length === 0) return;
+
+    const anchor = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
+    const startX = anchor.x + 248;
+    const startY = anchor.y + 60;
+
+    const orderedBlocks = blocks.slice().sort((left, right) => {
+      const leftRank = this.getExecutionStackRank(left.type);
+      const rightRank = this.getExecutionStackRank(right.type);
+      if (leftRank !== rightRank) return leftRank - rightRank;
+
+      const leftTemplate = BLOCK_TEMPLATES_BY_TYPE.get(left.type);
+      const rightTemplate = BLOCK_TEMPLATES_BY_TYPE.get(right.type);
+      return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
+    });
+
+    const topOfHelpers = startY + 290;
+    orderedBlocks.forEach((block, index) => {
+      if (typeof block.moveBy !== "function") return;
+      const current = block.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
+      block.moveBy(startX - current.x, topOfHelpers + index * 78 - current.y);
+    });
+  }
+
   private connectSectionBlocks(sectionId: SectionId, blocks: any[]): void {
     const sectionBlock = this.findBlockByType(getSectionBlockType(sectionId));
     const stackConnection = sectionBlock?.getInput("STACK")?.connection;
@@ -3983,13 +4018,20 @@ class BotBuilderApp {
     const visibleBlocks = orderedBlocks.filter((block) => this.isBlockVisible(block));
     if (visibleBlocks.length === 0) return;
 
+    const helperBlocks = sectionId === "execution"
+      ? visibleBlocks.filter((block) => this.isExecutionHelperBlockType(block.type))
+      : [];
+    const coreBlocks = sectionId === "execution"
+      ? visibleBlocks.filter((block) => !this.isExecutionHelperBlockType(block.type))
+      : visibleBlocks;
+
     // Disconnect any existing connections from the section
     if (stackConnection.isConnected()) {
       stackConnection.disconnect();
     }
 
     // Connect the first block to the section
-    const firstBlock = visibleBlocks[0];
+    const firstBlock = coreBlocks[0];
     if (firstBlock?.previousConnection) {
       if (firstBlock.previousConnection.isConnected()) {
         firstBlock.previousConnection.disconnect();
@@ -3998,9 +4040,9 @@ class BotBuilderApp {
     }
 
     // Chain the remaining blocks
-    for (let index = 0; index < visibleBlocks.length - 1; index += 1) {
-      const current = visibleBlocks[index];
-      const next = visibleBlocks[index + 1];
+    for (let index = 0; index < coreBlocks.length - 1; index += 1) {
+      const current = coreBlocks[index];
+      const next = coreBlocks[index + 1];
       
       if (current?.nextConnection && next?.previousConnection) {
         // Disconnect existing connections
@@ -4013,6 +4055,10 @@ class BotBuilderApp {
         // Connect current to next
         current.nextConnection.connect(next.previousConnection);
       }
+    }
+
+    if (sectionId === "execution" && helperBlocks.length > 0) {
+      this.placeExecutionHelperBlocks(sectionBlock, helperBlocks);
     }
   }
 
