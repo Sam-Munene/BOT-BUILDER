@@ -306,6 +306,108 @@ function buildTemplateJson(template: BlockTemplate): any {
     };
   }
 
+  if (template.type === "market_section") {
+    return {
+      message0: `${template.title} %1`,
+      args0: [{ type: "input_statement", name: "STACK" }],
+      nextStatement: null,
+      colour: template.color,
+      tooltip: template.description,
+    };
+  }
+
+  if (template.type === "condition_exit") {
+    return {
+      message0: template.title,
+      message1: "Condition %1",
+      args1: [
+        {
+          type: "field_dropdown",
+          name: "CONDITION",
+          options: [
+            ["Sell by Count Down", "SELL_BY_COUNT_DOWN"],
+            ["Sell by Take Profit", "SELL_BY_TAKE_PROFIT"],
+            ["Price Above", "PRICE_GT"],
+            ["Price Below", "PRICE_LT"],
+            ["Price Between", "PRICE_BETWEEN"],
+            ["Current Tick Value", "CURRENT_TICK"],
+            ["Tick Count", "TICK_COUNT"],
+            ["Stop Loss Hit", "STOP_LOSS_HIT"],
+            ["Take Profit Hit", "TAKE_PROFIT_HIT"],
+            ["Time of Day", "TIME_OF_DAY"],
+            ["Duration Elapsed", "DURATION_ELAPSED"],
+          ],
+        },
+      ],
+      message2: "Value %1",
+      args2: [{ type: "field_input", name: "VALUE", text: "5" }],
+      previousStatement: null,
+      nextStatement: null,
+      colour: template.color,
+      tooltip: template.description,
+      inputsInline: false,
+    };
+  }
+
+  if (template.type === "condition_entry") {
+    return {
+      message0: template.title,
+      message1: "Condition %1",
+      args1: [
+        {
+          type: "field_dropdown",
+          name: "CONDITION",
+          options: [
+            ["Always", "ALWAYS"],
+            ["Price Above", "PRICE_GT"],
+            ["Price Below", "PRICE_LT"],
+            ["Price Between", "PRICE_BETWEEN"],
+            ["Current Tick Value", "CURRENT_TICK"],
+            ["Tick Count", "TICK_COUNT"],
+            ["Has Position", "HAS_POSITION"],
+            ["No Position", "NO_POSITION"],
+            ["Loss Threshold Reached", "LOSS_THRESHOLD"],
+            ["Profit Threshold Reached", "PROFIT_THRESHOLD"],
+            ["Time of Day", "TIME_OF_DAY"],
+            ["Duration Elapsed", "DURATION_ELAPSED"],
+          ],
+        },
+      ],
+      message2: "Value %1",
+      args2: [{ type: "field_input", name: "VALUE", text: "" }],
+      message3: "Value 2 %1",
+      args3: [{ type: "field_input", name: "VALUE_2", text: "" }],
+      previousStatement: null,
+      nextStatement: null,
+      colour: template.color,
+      tooltip: template.description,
+      inputsInline: false,
+    };
+  }
+
+  if (template.type === "martingale_settings") {
+    return {
+      message0: template.title,
+      message1: "Initial Stake %1",
+      args1: [{ type: "field_number", name: "INITIAL_STAKE", value: 10, min: 0.5, max: 50000, precision: 0.5 }],
+      message2: "Multiplier %1",
+      args2: [{ type: "field_number", name: "MULTIPLIER", value: 2, min: 1.1, max: 10, precision: 0.1 }],
+      message3: "Max Stake %1",
+      args3: [{ type: "field_number", name: "MAX_STAKE", value: 50, min: 0.5, max: 50000, precision: 0.5 }],
+      message4: "Profit Threshold %1",
+      args4: [{ type: "field_number", name: "PROFIT_THRESHOLD", value: 100, min: 0, max: 10000, precision: 0.5 }],
+      message5: "Loss Threshold %1",
+      args5: [{ type: "field_number", name: "LOSS_THRESHOLD", value: 50, min: 0, max: 10000, precision: 0.5 }],
+      message6: "Trade Again After Win %1",
+      args6: [{ type: "field_checkbox", name: "TRADE_AGAIN", checked: true }],
+      previousStatement: null,
+      nextStatement: null,
+      colour: template.color,
+      tooltip: template.description,
+      inputsInline: false,
+    };
+  }
+
   if (template.layout === "section") {
     return {
       message0: `${template.title} %1`,
@@ -401,15 +503,17 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
   const marketCategory = firstBlockByType(blocks, "market_category");
   const marketContract = firstBlockByType(blocks, "market_contract");
   const marketSettings = firstBlockByType(blocks, "market_settings");
+  const executionSettingsBlock = firstBlockByType(blocks, "execution_settings");
   const marketBarrier = firstBlockByType(blocks, "market_barrier");
   const marketBarrierLow = firstBlockByType(blocks, "market_barrier_low");
   const marketBarrierHigh = firstBlockByType(blocks, "market_barrier_high");
   const marketDigits = firstBlockByType(blocks, "market_digits");
   const marketRange = firstBlockByType(blocks, "market_range");
 
-  if (marketSymbol || marketCategory || marketContract || marketSettings || marketBarrier || marketDigits || marketRange) {
+  if (marketSymbol || marketCategory || marketContract || marketSettings || executionSettingsBlock || marketBarrier || marketDigits || marketRange) {
     const values = {
       ...(marketSettings?.values ?? {}),
+      ...(executionSettingsBlock?.values ?? {}),
       ...(marketSymbol?.values ?? {}),
       ...(marketCategory?.values ?? {}),
       ...(marketContract?.values ?? {}),
@@ -447,7 +551,7 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
   const executionStake = firstBlockByType(blocks, "execution_stake");
   const executionDuration = firstBlockByType(blocks, "execution_duration");
   const executionUnit = firstBlockByType(blocks, "execution_unit");
-  const executionSettings = firstBlockByType(blocks, "execution_settings");
+  const executionSettings = executionSettingsBlock;
   const executionRisk = firstBlockByType(blocks, "execution_risk");
   const executionWindow = firstBlockByType(blocks, "execution_window");
 
@@ -698,15 +802,20 @@ class BotBuilderApp {
   private currentLifecycleSubheading = "";
   private currentTradeOutcome: TradeOutcome | null = null;
   private currentTradeContractId: string | null = null;
+  private activeTradeSnapshot: StrategySnapshot | null = null;
   private sessionStateLabel: "Disconnected" | "Connecting" | "Connected" | "Authenticated" | "Session refreshed" = "Disconnected";
   private sessionStateNote = "Click Connect to start.";
   private readonly wsEventLog: WsEventLogEntry[] = [];
+  private readonly pendingWsWaits = new Set<() => void>();
   private readonly contractTypesBySymbol: Map<string, ContractTypeRecord[]> = new Map();
   private readonly proposalDefaultsBySymbol: Map<string, Map<string, ProposalDefaultsRecord>> = new Map();
   private readonly pendingContractTypeSymbols: Set<string> = new Set();
   private readonly pendingProposalDefaultsSymbols: Set<string> = new Set();
   private lastRenderedSymbolSignature = "";
   private syncingContractMetadata = false;
+  private pendingAutoRestartTimer: number | null = null;
+  private remainingAutoRestarts = 0;
+  private readonly maxAutoRestartRuns = 5;
 
   constructor(target: string | HTMLElement = "#app") {
     this.root = resolveTarget(target);
@@ -1121,31 +1230,37 @@ class BotBuilderApp {
       this.handleProposalDefaultsPayload(payload);
     };
     const handleTick = (tick: Record<string, unknown>) => {
-      if (this.currentTradeOutcome !== null) return;
+      if (this.currentTradeOutcome !== null || !this.currentLifecycle) return;
       this.latestTick = tick;
       this.appendWsEventLog("tick", tick);
     };
     const handleOrder = (message: Record<string, unknown>) => {
+      if (!this.currentLifecycle) return;
       this.appendWsEventLog("order", message);
       this.applyLifecycleEvent("order", message);
     };
     const handleContractCreated = (message: Record<string, unknown>) => {
+      if (!this.currentLifecycle) return;
       this.appendWsEventLog("contract_created", message);
       this.applyLifecycleEvent("order", message);
     };
     const handleContractActivated = (message: Record<string, unknown>) => {
+      if (!this.currentLifecycle) return;
       this.appendWsEventLog("contract_activated", message);
       this.applyLifecycleEvent("activated", message);
     };
     const handleContractSettled = (message: Record<string, unknown>) => {
+      if (!this.currentLifecycle) return;
       this.appendWsEventLog("contract_settled", message);
       this.applyLifecycleEvent("expiry", message);
     };
     const handleContractDetail = (message: Record<string, unknown>) => {
+      if (!this.currentLifecycle || !this.currentTradeContractId) return;
       this.appendWsEventLog("contract_detail", message);
       this.applyFinalTradeOutcomeFromPayload(message);
     };
     const handleContractHistory = (message: Record<string, unknown>) => {
+      if (!this.currentLifecycle || !this.currentTradeContractId) return;
       this.appendWsEventLog("contract_history", message);
       this.applyFinalTradeOutcomeFromPayload(message);
     };
@@ -1801,9 +1916,9 @@ class BotBuilderApp {
 
   private async requestFinalTradeOutcome(contractId: string): Promise<void> {
     try {
-      const detailWait = this.waitForWsEvent<Record<string, unknown>>("contract_detail", 8000);
       if (wsService.requestContractDetail(contractId)) {
         try {
+          const detailWait = this.waitForWsEvent<Record<string, unknown>>("contract_detail", 8000);
           const detailPayload = await detailWait;
           const detailRecord = this.extractOutcomeRecord(detailPayload, contractId);
           if (detailRecord) {
@@ -1815,9 +1930,9 @@ class BotBuilderApp {
         }
       }
 
-      const historyWait = this.waitForWsEvent<Record<string, unknown>>("contract_history", 8000);
       if (wsService.requestContractHistory(20, 0)) {
         try {
+          const historyWait = this.waitForWsEvent<Record<string, unknown>>("contract_history", 8000);
           const historyPayload = await historyWait;
           const historyRecord = this.extractOutcomeRecord(historyPayload, contractId);
           if (historyRecord) {
@@ -1837,6 +1952,7 @@ class BotBuilderApp {
   private applyFinalTradeOutcome(record: Record<string, unknown>, contractId: string | null = null): void {
     const outcome = this.resolveOutcomeFromRecord(record);
     if (!outcome) return;
+    if (this.currentTradeOutcome !== null) return;
 
     this.currentTradeOutcome = outcome;
     if (contractId !== null) {
@@ -1862,6 +1978,7 @@ class BotBuilderApp {
     }
     this.stopActiveTradeFeed();
     this.updateFeedStatus(`${label}${this.currentTradeContractId !== null ? ` for contract ${this.currentTradeContractId}` : ""}.`);
+    this.queueAutoRestart(outcome);
   }
 
   private applyFinalTradeOutcomeFromPayload(payload: Record<string, unknown>): void {
@@ -2236,6 +2353,13 @@ class BotBuilderApp {
     const currentVisible = typeof block.isVisible === "function" ? block.isVisible() : undefined;
     if (currentVisible === visible) return false;
     block.setVisible(visible);
+    if (visible) {
+      const template = BLOCK_TEMPLATES_BY_TYPE.get(block.type);
+      const sectionId = template?.sectionId as SectionId | undefined;
+      if (sectionId) {
+        this.placeSectionBlocks(sectionId);
+      }
+    }
     return true;
   }
 
@@ -2248,14 +2372,11 @@ class BotBuilderApp {
       const contractType = this.getSelectedContractType();
       const record = this.getContractTypeRecordForSymbol(symbol, contractType);
       const defaults = this.getProposalDefaultsRecordForSymbol(symbol, contractType);
-      
-      // ===== DECLARE BLOCK REFERENCES FIRST =====
+
       const executionSettingsBlock = this.findBlockByType("execution_settings");
       const executionStakeBlock = this.findBlockByType("execution_stake");
       const executionUnitBlock = this.findBlockByType("execution_unit");
       const executionDurationBlock = this.findBlockByType("execution_duration");
-      
-      // ===== NOW USE THEM =====
       const executionDefaults = defaults ?? null;
       const allowedUnits = executionDefaults?.allowed_units?.length ? executionDefaults.allowed_units : ["t"];
       const unitOptions = allowedUnits.map((unit) => ({ label: unit.toUpperCase(), value: unit }));
@@ -2279,32 +2400,27 @@ class BotBuilderApp {
       const isDoubleBarrier = barrierCount === 2 && this.getDoubleBarrierContractTypes().has(contractType);
       const isDigitTarget = this.getDigitTargetContractTypes().has(contractType);
       const isDigitRange = this.getDigitRangeContractTypes().has(contractType);
-      
-      // Remove stale blocks
-      const removedStaleHelpers =
-        (!isSingleBarrier && this.disposeBlockByType("market_barrier")) ||
-        (!isDoubleBarrier && this.disposeBlockByType("market_barrier_low")) ||
-        (!isDoubleBarrier && this.disposeBlockByType("market_barrier_high")) ||
-        (!isDigitTarget && this.disposeBlockByType("market_digits")) ||
-        (!isDigitRange && this.disposeBlockByType("market_range"));
-      
-      // Ensure blocks exist and set visibility
-      const barrierBlock = isSingleBarrier ? this.ensureBlockByType("market_barrier") : this.findBlockByType("market_barrier");
-      const barrierLowBlock = isDoubleBarrier ? this.ensureBlockByType("market_barrier_low") : this.findBlockByType("market_barrier_low");
-      const barrierHighBlock = isDoubleBarrier ? this.ensureBlockByType("market_barrier_high") : this.findBlockByType("market_barrier_high");
-      const digitTargetBlock = isDigitTarget ? this.ensureBlockByType("market_digits") : this.findBlockByType("market_digits");
-      const digitRangeBlock = isDigitRange ? this.ensureBlockByType("market_range") : this.findBlockByType("market_range");
-      
-      // Set visibility
-      const visibleChanged =
-        removedStaleHelpers ||
-        this.setBlockVisibility(barrierBlock, Boolean(barrierBlock && isSingleBarrier)) ||
-        this.setBlockVisibility(barrierLowBlock, isDoubleBarrier) ||
-        this.setBlockVisibility(barrierHighBlock, isDoubleBarrier) ||
-        this.setBlockVisibility(digitTargetBlock, isDigitTarget) ||
-        this.setBlockVisibility(digitRangeBlock, isDigitRange);
 
-      // Stake limits
+      const legacyBarrierBlock = this.findBlockByType("market_barrier");
+      const legacyBarrierLowBlock = this.findBlockByType("market_barrier_low");
+      const legacyBarrierHighBlock = this.findBlockByType("market_barrier_high");
+      const legacyDigitTargetBlock = this.findBlockByType("market_digits");
+      const legacyDigitRangeBlock = this.findBlockByType("market_range");
+
+      const legacyBarrierValue = this.toFiniteNumber(legacyBarrierBlock?.getFieldValue("BARRIER_VALUE"));
+      const legacyBarrierLowValue = this.toFiniteNumber(legacyBarrierLowBlock?.getFieldValue("BARRIER_LOW"));
+      const legacyBarrierHighValue = this.toFiniteNumber(legacyBarrierHighBlock?.getFieldValue("BARRIER_HIGH"));
+      const legacyDigitTargetValue = this.toFiniteNumber(legacyDigitTargetBlock?.getFieldValue("DIGIT_TARGET"));
+      const legacyRangeLowValue = this.toFiniteNumber(legacyDigitRangeBlock?.getFieldValue("RANGE_LOW"));
+      const legacyRangeHighValue = this.toFiniteNumber(legacyDigitRangeBlock?.getFieldValue("RANGE_HIGH"));
+
+      const removedLegacyBlocks =
+        this.disposeBlockByType("market_barrier") ||
+        this.disposeBlockByType("market_barrier_low") ||
+        this.disposeBlockByType("market_barrier_high") ||
+        this.disposeBlockByType("market_digits") ||
+        this.disposeBlockByType("market_range");
+
       const stakeMin = executionDefaults?.min_stake ?? 0.5;
       const stakeMax = executionDefaults?.max_stake ?? 5000;
       const desiredDuration = this.clampNumber(
@@ -2314,13 +2430,12 @@ class BotBuilderApp {
         5,
       );
       const desiredStake = this.clampNumber(
-        stakeMin,
+        executionDefaults?.default_stake ?? stakeMin,
         stakeMin,
         stakeMax,
         stakeMin,
       );
 
-      // Sync stake field function
       const syncStakeField = (block: any): void => {
         if (!block) return;
         this.updateNumberFieldBounds(block, "STAKE", {
@@ -2331,27 +2446,22 @@ class BotBuilderApp {
         });
       };
 
-      // Sync unit field function
       const syncUnitField = (block: any): string | null => {
         if (!block) return null;
-        
-        // Get current value
+
         const currentValue = safeString(block.getFieldValue("DURATION_UNIT"));
-        
-        // Update dropdown options to only allowed units
         const result = this.updateDropdownFieldOptions(
           block,
           "DURATION_UNIT",
           unitOptions,
-          // If current value is allowed, keep it, otherwise use resolved unit
           unitOptions.some((opt) => opt.value === currentValue) ? currentValue : resolvedUnit,
           resolvedUnit.toUpperCase(),
-          false // Don't preserve current value if invalid
+          false,
         );
-        
-        // If the current value was invalid, it will be set to resolvedUnit
+
         return result ?? resolvedUnit;
       };
+
       const syncDurationField = (block: any, unitValue: string | null): void => {
         if (!block) return;
         const nextUnit = allowedUnits.includes(unitValue ?? "") ? (unitValue as string) : resolvedUnit;
@@ -2359,16 +2469,15 @@ class BotBuilderApp {
           executionDefaults?.duration_limits?.[nextUnit] ??
           executionDefaults?.duration_limits?.[resolvedUnit] ??
           selectedDurationLimits;
-        
+
         const currentValue = this.toFiniteNumber(block.getFieldValue("DURATION"));
         const defaultVal = this.clampNumber(
           executionDefaults?.default_duration ?? currentValue ?? nextLimits.min,
           nextLimits.min,
           nextLimits.max,
-          nextLimits.min
+          nextLimits.min,
         );
-        
-        // This applies the min/max bounds to the field - user can adjust within range
+
         this.updateNumberFieldBounds(block, "DURATION", {
           min: nextLimits.min,
           max: nextLimits.max,
@@ -2377,7 +2486,8 @@ class BotBuilderApp {
         });
       };
 
-      // Execute sync functions
+      let visibleChanged = removedLegacyBlocks;
+
       if (executionSettingsBlock) {
         syncStakeField(executionSettingsBlock);
         const unitValue = syncUnitField(executionSettingsBlock);
@@ -2397,8 +2507,9 @@ class BotBuilderApp {
         syncDurationField(executionDurationBlock, unitValue);
       }
 
-      // Single Barrier
-      if (barrierBlock && isSingleBarrier) {
+      if (isSingleBarrier) {
+        const barrierBlock = this.ensureBlockByType("market_barrier");
+        visibleChanged = this.setBlockVisibility(barrierBlock, true) || visibleChanged;
         const direction = safeString(executionDefaults?.barrier_direction ?? "positive").toLowerCase();
         const { min: barrierMinAbs, max: barrierMaxAbs } = this.getSingleBarrierBounds(executionDefaults);
         const baseBarrier = this.clampNumber(
@@ -2418,18 +2529,31 @@ class BotBuilderApp {
         });
       }
 
-      // Double Barrier
-      if (barrierLowBlock && barrierHighBlock && isDoubleBarrier) {
+      if (isDoubleBarrier) {
+        const barrierLowBlock = this.ensureBlockByType("market_barrier_low");
+        const barrierHighBlock = this.ensureBlockByType("market_barrier_high");
+        visibleChanged = this.setBlockVisibility(barrierLowBlock, true) || visibleChanged;
+        visibleChanged = this.setBlockVisibility(barrierHighBlock, true) || visibleChanged;
         const { lowMin, lowMax, highMin, highMax } = this.getDoubleBarrierBounds(executionDefaults);
-        const barrierLowDefault = this.clampNumber(executionDefaults?.barrier_low_default ?? -0.486, lowMin, lowMax, -0.486);
-        const barrierHighDefault = this.clampNumber(executionDefaults?.barrier_high_default ?? 0.486, highMin, highMax, 0.486);
-        this.updateNumberFieldBounds(barrierLowBlock, "BARRIER_LOW", {
+        const barrierLowDefault = legacyBarrierLowValue ?? this.clampNumber(
+          executionDefaults?.barrier_low_default ?? -0.486,
+          lowMin,
+          lowMax,
+          -0.486,
+        );
+        const barrierHighDefault = legacyBarrierHighValue ?? this.clampNumber(
+          executionDefaults?.barrier_high_default ?? 0.486,
+          highMin,
+          highMax,
+          0.486,
+        );
+        this.updateNumberFieldBounds(executionSettingsBlock, "BARRIER_LOW", {
           min: lowMin,
           max: lowMax,
           precision: 0.001,
           defaultValue: barrierLowDefault,
         });
-        this.updateNumberFieldBounds(barrierHighBlock, "BARRIER_HIGH", {
+        this.updateNumberFieldBounds(executionSettingsBlock, "BARRIER_HIGH", {
           min: highMin,
           max: highMax,
           precision: 0.001,
@@ -2437,9 +2561,10 @@ class BotBuilderApp {
         });
       }
 
-      // Digit Target
-      if (digitTargetBlock && isDigitTarget) {
-        const currentOperator = safeString(digitTargetBlock.getFieldValue("DIGIT_OPERATOR") ?? "MATCHES") || "MATCHES";
+      if (isDigitTarget) {
+        const digitTargetBlock = this.ensureBlockByType("market_digits");
+        visibleChanged = this.setBlockVisibility(digitTargetBlock, true) || visibleChanged;
+        const currentOperator = safeString(digitTargetBlock?.getFieldValue("DIGIT_OPERATOR") ?? "MATCHES") || "MATCHES";
         const operatorOptions = [
           { label: "Matches", value: "MATCHES" },
           { label: "Differs", value: "DIFFERS" },
@@ -2466,8 +2591,9 @@ class BotBuilderApp {
         });
       }
 
-      // Digit Range
-      if (digitRangeBlock && isDigitRange) {
+      if (isDigitRange) {
+        const digitRangeBlock = this.ensureBlockByType("market_range");
+        visibleChanged = this.setBlockVisibility(digitRangeBlock, true) || visibleChanged;
         const usingBarrierDefaults = isDoubleBarrier;
         const digitRangeBounds = this.getDigitRangeBounds(executionDefaults, usingBarrierDefaults);
         this.updateNumberFieldBounds(digitRangeBlock, "RANGE_LOW", {
@@ -2484,8 +2610,7 @@ class BotBuilderApp {
         });
       }
 
-      if (visibleChanged) {
-        // Re-position and reconnect all blocks in execution section
+      if (visibleChanged || legacyBarrierBlock || legacyBarrierLowBlock || legacyBarrierHighBlock || legacyDigitTargetBlock || legacyDigitRangeBlock) {
         this.placeSectionBlocks("execution");
         try {
           this.workspace.render();
@@ -2906,8 +3031,18 @@ class BotBuilderApp {
         this.requestProposalDefaultsForSymbol(symbol);
       }
       const marketSettingsBlock = this.findBlockByType("market_settings");
-      const categoryBlock = this.findBlockByType("market_category");
-      const contractBlock = this.findBlockByType("market_contract");
+      let categoryBlock = this.findBlockByType("market_category");
+      let contractBlock = this.findBlockByType("market_contract");
+      const marketSymbolBlock = this.findBlockByType("market_symbol");
+
+      if (marketSettingsBlock) {
+        if (marketSymbolBlock) this.disposeBlockByType("market_symbol");
+        if (categoryBlock) this.disposeBlockByType("market_category");
+        if (contractBlock) this.disposeBlockByType("market_contract");
+        categoryBlock = null;
+        contractBlock = null;
+      }
+
       const currentCategory = this.getSelectedContractCategory();
       const currentContract = this.getSelectedContractType();
       const currentCategoryRecord = this.resolveContractCategoryRecord(records, currentCategory);
@@ -2986,17 +3121,17 @@ class BotBuilderApp {
 
       const contractOptionsValues = new Set(contractOptions.map((option) => option.value));
       const preferredContract =
-        (contractOptionSource.find((record) => record.contract_type === currentContract)?.contract_type ?? "") ||
-        (contractOptionSource.find((record) => record.contract_type === "UP")?.contract_type ?? "") ||
-        (contractOptionsValues.has(this.selectedContractType) ? this.selectedContractType : "") ||
-        currentContract;
-
+        contractOptionSource.find((record) => record.contract_type === currentContract)?.contract_type ??
+        contractOptionSource.find((record) => record.contract_type === "UP")?.contract_type ??
+        contractOptions[0]?.value ??
+        "";
       const preferredContractRecord = contractOptionSource.find((record) => record.contract_type === preferredContract) ?? null;
+      const preferredContractValue = contractOptionsValues.has(currentContract) ? preferredContract : null;
       const nextContract = this.updateDropdownFieldOptions(
         marketSettingsBlock ?? contractBlock,
         "CONTRACT_TYPE",
         contractOptions,
-        preferredContract,
+        preferredContractValue,
         preferredContractRecord?.contract_type || null,
       ) ?? preferredContract;
       this.selectedContractType = nextContract;
@@ -3021,6 +3156,19 @@ class BotBuilderApp {
     if (!this.subscribedSymbol) return;
     wsService.unsubscribe(this.subscribedSymbol);
     this.subscribedSymbol = null;
+  }
+
+  private resetTradeRuntimeState(clearEventLog = false): void {
+    this.stopActiveTradeFeed();
+    this.currentLifecycle = null;
+    this.currentLifecycleHeading = "";
+    this.currentLifecycleSubheading = "";
+    this.currentTradeOutcome = null;
+    this.currentTradeContractId = null;
+    this.latestTick = null;
+    if (clearEventLog) {
+      this.wsEventLog.length = 0;
+    }
   }
 
   private syncSymbolDropdowns(): void {
@@ -3056,15 +3204,25 @@ class BotBuilderApp {
 
   private waitForWsEvent<T>(eventName: string, timeoutMs = 20000): Promise<T> {
     return new Promise((resolve, reject) => {
+      let settled = false;
       const timeout = window.setTimeout(() => {
         cleanup();
         reject(new Error(`Timed out waiting for ${eventName}`));
       }, timeoutMs);
 
+      const cancel = () => {
+        if (settled) return;
+        cleanup();
+        reject(new Error(`Cancelled waiting for ${eventName}`));
+      };
+
       const cleanup = () => {
+        if (settled) return;
+        settled = true;
         window.clearTimeout(timeout);
         wsService.off(eventName, handler);
         wsService.off("error", handleError);
+        this.pendingWsWaits.delete(cancel);
       };
 
       const handler = (payload: T) => {
@@ -3079,6 +3237,7 @@ class BotBuilderApp {
 
       wsService.on(eventName, handler);
       wsService.on("error", handleError);
+      this.pendingWsWaits.add(cancel);
     });
   }
 
@@ -3144,6 +3303,57 @@ class BotBuilderApp {
     wsService.subscribe(nextSymbol);
     this.subscribedSymbol = nextSymbol;
     await new Promise<void>((resolve) => window.setTimeout(resolve, 750));
+  }
+
+  private clearPendingTradeWaits(): void {
+    for (const cancel of this.pendingWsWaits) {
+      cancel();
+    }
+    this.pendingWsWaits.clear();
+  }
+
+  private clearPendingAutoRestart(): void {
+    if (this.pendingAutoRestartTimer) {
+      window.clearTimeout(this.pendingAutoRestartTimer);
+      this.pendingAutoRestartTimer = null;
+    }
+  }
+
+  private startTradeSession(preserveAutoRestartState = false): void {
+    this.clearPendingTradeWaits();
+    this.clearPendingAutoRestart();
+    if (!preserveAutoRestartState) {
+      this.remainingAutoRestarts = this.maxAutoRestartRuns - 1;
+    }
+  }
+
+  private shouldAutoRestart(outcome: TradeOutcome): boolean {
+    if (!this.activeTradeSnapshot) return false;
+
+    const restartType = safeString(this.activeTradeSnapshot.restart?.condition?.type ?? "").trim().toUpperCase();
+    const management = this.activeTradeSnapshot.conditions?.management as Record<string, unknown> | null | undefined;
+    const tradeAgain = management ? Boolean(management.tradeAgain ?? true) : true;
+    if (!tradeAgain) return false;
+    if (this.remainingAutoRestarts <= 0) return false;
+
+    if (restartType === "AFTER_WIN_OR_LOSS") return outcome === "won" || outcome === "lost";
+    if (restartType === "AFTER_WIN") return outcome === "won";
+    if (restartType === "AFTER_LOSS") return outcome === "lost";
+    return false;
+  }
+
+  private queueAutoRestart(outcome: TradeOutcome): void {
+    if (!this.shouldAutoRestart(outcome)) return;
+
+    const snapshot = this.activeTradeSnapshot;
+    if (!snapshot) return;
+
+    this.remainingAutoRestarts -= 1;
+    this.clearPendingAutoRestart();
+    this.pendingAutoRestartTimer = window.setTimeout(() => {
+      this.pendingAutoRestartTimer = null;
+      void this.runStrategy({ preserveAutoRestartState: true, snapshot });
+    }, 0);
   }
 
   private async runLiveTrade(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -3617,6 +3827,12 @@ class BotBuilderApp {
 
     // Sort blocks - execution_settings first, then others by order
     blocks = blocks.sort((left, right) => {
+      if (sectionId === "execution") {
+        const leftRank = this.getExecutionStackRank(left.type);
+        const rightRank = this.getExecutionStackRank(right.type);
+        if (leftRank !== rightRank) return leftRank - rightRank;
+      }
+
       const leftTemplate = BLOCK_TEMPLATES_BY_TYPE.get(left.type);
       const rightTemplate = BLOCK_TEMPLATES_BY_TYPE.get(right.type);
       
@@ -3636,10 +3852,8 @@ class BotBuilderApp {
 
     if (visibleBlocks.length === 0) return;
 
-    // Position blocks
+    // Place the blocks in their section order first, then connect them as a chain.
     this.placeBlockWithinSection(sectionBlock, visibleBlocks, sectionId);
-    
-    // Connect blocks in chain (execution_settings -> barrier -> digit)
     this.connectSectionBlocks(sectionId, visibleBlocks);
   }
 
@@ -3655,6 +3869,12 @@ class BotBuilderApp {
     
     // Sort blocks: top blocks first, then by order
     const sortedBlocks = blocks.slice().sort((left, right) => {
+      if (sectionId === "execution") {
+        const leftRank = this.getExecutionStackRank(left.type);
+        const rightRank = this.getExecutionStackRank(right.type);
+        if (leftRank !== rightRank) return leftRank - rightRank;
+      }
+
       const leftIsTop = topBlocks.includes(left.type);
       const rightIsTop = topBlocks.includes(right.type);
       
@@ -3666,14 +3886,22 @@ class BotBuilderApp {
       return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
     });
 
-    // Position blocks vertically with consistent spacing
+    const useExactStackSpacing = sectionId === "execution";
+    let cursorY = startY;
+
     sortedBlocks.forEach((block, index) => {
       const x = startX;
-      const y = startY + index * 88; // Consistent spacing
+      const y = useExactStackSpacing ? cursorY : startY + index * 88;
 
       if (typeof block.moveBy === "function") {
         const current = block.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
         block.moveBy(x - current.x, y - current.y);
+      }
+
+      if (useExactStackSpacing) {
+        const size = typeof block.getHeightWidth === "function" ? block.getHeightWidth() : null;
+        const height = Number(size?.height) > 0 ? Number(size.height) : 88;
+        cursorY += height + 10;
       }
     });
   }
@@ -3704,6 +3932,31 @@ class BotBuilderApp {
     return true;
   }
 
+  private getExecutionStackRank(type: string): number {
+    switch (type) {
+      case "execution_settings":
+        return 0;
+      case "execution_stake":
+        return 1;
+      case "execution_unit":
+        return 2;
+      case "execution_duration":
+        return 3;
+      case "market_barrier":
+        return 4;
+      case "market_barrier_low":
+        return 4;
+      case "market_digits":
+        return 5;
+      case "market_barrier_high":
+        return 5;
+      case "market_range":
+        return 6;
+      default:
+        return 10;
+    }
+  }
+
   private connectSectionBlocks(sectionId: SectionId, blocks: any[]): void {
     const sectionBlock = this.findBlockByType(getSectionBlockType(sectionId));
     const stackConnection = sectionBlock?.getInput("STACK")?.connection;
@@ -3711,6 +3964,12 @@ class BotBuilderApp {
 
     // Sort blocks to ensure correct order - execution_settings first
     const orderedBlocks = blocks.slice().sort((left, right) => {
+      if (sectionId === "execution") {
+        const leftRank = this.getExecutionStackRank(left.type);
+        const rightRank = this.getExecutionStackRank(right.type);
+        if (leftRank !== rightRank) return leftRank - rightRank;
+      }
+
       const leftTemplate = BLOCK_TEMPLATES_BY_TYPE.get(left.type);
       const rightTemplate = BLOCK_TEMPLATES_BY_TYPE.get(right.type);
       
@@ -3721,7 +3980,6 @@ class BotBuilderApp {
       return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
     });
 
-    // Filter visible blocks
     const visibleBlocks = orderedBlocks.filter((block) => this.isBlockVisible(block));
     if (visibleBlocks.length === 0) return;
 
@@ -3773,6 +4031,14 @@ class BotBuilderApp {
     block.initSvg();
     block.render();
     this.setBlockVisibility(block, false);
+    if (template.sectionId) {
+      const sectionBlock = this.findBlockByType(getSectionBlockType(template.sectionId as SectionId));
+      if (sectionBlock) {
+        const sectionAnchor = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
+        const current = block.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
+        block.moveBy(sectionAnchor.x + 248 - current.x, sectionAnchor.y + 60 - current.y);
+      }
+    }
     return block;
   }
 
@@ -3811,7 +4077,7 @@ class BotBuilderApp {
       for (const section of [
         { id: "market", height: 200 },
         { id: "execution", height: 400 },
-        { id: "conditions", height: 600 },
+        { id: "conditions", height: 640 },
         { id: "indicators", height: 100 },
         { id: "restart", height: 100 },
       ] as Array<{ id: SectionId; height: number }>) {
@@ -3954,8 +4220,8 @@ class BotBuilderApp {
         yCursor += section.height;
       }
 
-      this.normalizeAllSections();
       this.syncExecutionHelperVisibility();
+      this.normalizeAllSections();
       
       // Sync symbol dropdowns after seeding
       this.syncSymbolDropdowns();
@@ -4122,10 +4388,17 @@ class BotBuilderApp {
     return Blockly.Xml.domToText(xmlDom);
   }
 
-  private async runStrategy(): Promise<void> {
-    if (!this.lastSnapshot) return;
+  private async runStrategy(options: { preserveAutoRestartState?: boolean; snapshot?: StrategySnapshot } = {}): Promise<void> {
+    const preserveAutoRestartState = options.preserveAutoRestartState ?? false;
+    const snapshot = options.snapshot ?? this.lastSnapshot;
+    if (!snapshot) return;
 
-    const payload = this.createOrderPayload(this.lastSnapshot);
+    if (!preserveAutoRestartState) {
+      this.clearPendingAutoRestart();
+      this.remainingAutoRestarts = 0;
+    }
+
+    const payload = snapshot.apiPayload ?? this.createOrderPayload(snapshot);
     const payloadValidationErrors = payload ? this.validatePayloadAgainstMetadata(payload) : ["Build market and execution blocks first."];
     const apiValidation = payload
       ? validationService.validateApiPayload(payload)
@@ -4194,6 +4467,9 @@ class BotBuilderApp {
       `;
     }
 
+    this.startTradeSession(preserveAutoRestartState);
+    this.activeTradeSnapshot = snapshot;
+    this.resetTradeRuntimeState(true);
     this.appendWsEventLog("run", {
       symbol: payload.symbol ?? DEFAULT_SYMBOL,
       contract_type: payload.contract_type ?? "UP",
@@ -4202,8 +4478,6 @@ class BotBuilderApp {
     });
 
     try {
-      this.currentTradeOutcome = null;
-      this.currentTradeContractId = null;
       const orderData = await this.runLiveTrade(payload);
       this.currentTradeContractId = this.toTradeId(orderData.contract_id ?? orderData.contractId) ?? null;
       const lifecycle = this.buildTradeLifecycle(payload, orderData);
@@ -4326,8 +4600,8 @@ class BotBuilderApp {
         this.connectSectionBlocks(sectionId, importedBlocks);
       }
 
-      this.normalizeAllSections();
       this.syncExecutionHelperVisibility();
+      this.normalizeAllSections();
       this.refreshAllPanels();
     } finally {
       Blockly.Events.enable();
@@ -4415,6 +4689,7 @@ class BotBuilderApp {
     const xmlDom = Blockly.Xml.textToDom(result.data.xml);
     this.workspace.clear();
     Blockly.Xml.domToWorkspace(xmlDom, this.workspace);
+    this.syncExecutionHelperVisibility();
     this.refreshAllPanels();
   }
 
@@ -4422,6 +4697,10 @@ class BotBuilderApp {
     if (!this.workspace) return;
     const confirmClear = window.confirm("Clear the workspace and restore the scaffold?");
     if (!confirmClear) return;
+    this.clearPendingAutoRestart();
+    this.clearPendingTradeWaits();
+    this.activeTradeSnapshot = null;
+    this.resetTradeRuntimeState(true);
     this.workspace.clear();
     this.seedWorkspace(true, DEFAULT_SYMBOL);
     this.refreshAllPanels();

@@ -192,28 +192,87 @@ export class ValidationService {
    */
   private validateConditions(conditions: Conditions): string[] {
     const errors: string[] = [];
+    const noValueConditions = new Set([
+      'ALWAYS',
+      'HAS_POSITION',
+      'NO_POSITION',
+    ]);
+    const numericConditionTypes = new Set([
+      'PRICE_GT',
+      'PRICE_LT',
+      'CURRENT_TICK',
+      'TICK_COUNT',
+      'LOSS_THRESHOLD',
+      'PROFIT_THRESHOLD',
+      'SELL_BY_COUNT_DOWN',
+      'SELL_BY_TAKE_PROFIT',
+      'STOP_LOSS_HIT',
+      'TAKE_PROFIT_HIT',
+      'DURATION_ELAPSED',
+    ]);
+    const timeConditionTypes = new Set(['TIME_OF_DAY']);
+
+    const validateCondition = (condition: { type: string; value: string; value2?: string } | undefined, prefix: string): void => {
+      if (!condition) return;
+      const type = String(condition.type ?? '').trim().toUpperCase();
+      const value = String(condition.value ?? '').trim();
+      const value2 = String(condition.value2 ?? '').trim();
+
+      if (!type) {
+        errors.push(`${prefix} condition type is required`);
+        return;
+      }
+
+      if (noValueConditions.has(type)) {
+        return;
+      }
+
+      if (type === 'PRICE_BETWEEN') {
+        if (!value || !value2) {
+          errors.push(`${prefix} condition requires two values`);
+          return;
+        }
+        const low = Number(value);
+        const high = Number(value2);
+        if (!Number.isFinite(low) || !Number.isFinite(high)) {
+          errors.push(`${prefix} condition values must be numbers`);
+          return;
+        }
+        if (low >= high) {
+          errors.push(`${prefix} condition lower value must be less than upper value`);
+        }
+        return;
+      }
+
+      if (timeConditionTypes.has(type)) {
+        if (!value) {
+          errors.push(`${prefix} condition value is required`);
+          return;
+        }
+        if (!/^\d{1,2}:\d{2}$/.test(value)) {
+          errors.push(`${prefix} condition time must be in HH:MM format`);
+        }
+        return;
+      }
+
+      if (!value) {
+        errors.push(`${prefix} condition value is required`);
+        return;
+      }
+
+      if (numericConditionTypes.has(type)) {
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue)) {
+          errors.push(`${prefix} condition value must be a number`);
+        }
+      }
+    };
 
     // Purchase condition
-    if (conditions.purchase) {
-      if (!conditions.purchase.type) {
-        errors.push('Purchase condition type is required');
-      }
-      
-      if (conditions.purchase.type !== 'ALWAYS' && !conditions.purchase.value) {
-        errors.push('Purchase condition value is required');
-      }
-    }
+    validateCondition(conditions.purchase as { type: string; value: string; value2?: string } | undefined, 'Purchase');
 
     // Sell condition
-    if (conditions.sell) {
-      if (!conditions.sell.type) {
-        errors.push('Sell condition type is required');
-      }
-      
-      if (conditions.sell.type !== 'ALWAYS' && !conditions.sell.value) {
-        errors.push('Sell condition value is required');
-      }
-    }
+    validateCondition(conditions.sell as { type: string; value: string; value2?: string } | undefined, 'Sell');
 
     return errors;
   }

@@ -1766,9 +1766,10 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
           { label: "Tick Count", value: "TICK_COUNT" },
           { label: "Has Position", value: "HAS_POSITION" },
           { label: "No Position", value: "NO_POSITION" },
-          { label: "Trade Again", value: "TRADE_AGAIN" },
           { label: "Loss Threshold Reached", value: "LOSS_THRESHOLD" },
           { label: "Profit Threshold Reached", value: "PROFIT_THRESHOLD" },
+          { label: "Time of Day", value: "TIME_OF_DAY" },
+          { label: "Duration Elapsed", value: "DURATION_ELAPSED" },
         ],
       },
       {
@@ -1807,12 +1808,15 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
         options: [
           { label: "Sell by Count Down", value: "SELL_BY_COUNT_DOWN" },
           { label: "Sell by Take Profit", value: "SELL_BY_TAKE_PROFIT" },
+          { label: "Price Above", value: "PRICE_GT" },
+          { label: "Price Below", value: "PRICE_LT" },
+          { label: "Price Between", value: "PRICE_BETWEEN" },
+          { label: "Current Tick Value", value: "CURRENT_TICK" },
+          { label: "Tick Count", value: "TICK_COUNT" },
           { label: "Stop Loss Hit", value: "STOP_LOSS_HIT" },
           { label: "Take Profit Hit", value: "TAKE_PROFIT_HIT" },
           { label: "Time of Day", value: "TIME_OF_DAY" },
           { label: "Duration Elapsed", value: "DURATION_ELAPSED" },
-          { label: "Current Tick Value", value: "CURRENT_TICK" },
-          { label: "Tick Count", value: "TICK_COUNT" },
         ],
       },
       {
@@ -1829,8 +1833,8 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   
   {
     type: "martingale_settings",
-    title: "Conditions Settings",
-    description: "Configure martingale trade management.",
+    title: "Utility / Risk Settings",
+    description: "Configure utility and martingale-style trade management.",
     categoryId: "conditions",
     groupId: "management",
     order: 90,
