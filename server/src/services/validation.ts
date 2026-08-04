@@ -212,7 +212,7 @@ export class ValidationService {
     ]);
     const timeConditionTypes = new Set(['TIME_OF_DAY']);
 
-    const validateCondition = (condition: { type: string; value: string; value2?: string } | undefined, prefix: string): void => {
+    const validateCondition = (condition: { type: string; value: string; value2?: string } | null | undefined, prefix: string): void => {
       if (!condition) return;
       const type = String(condition.type ?? '').trim().toUpperCase();
       const value = String(condition.value ?? '').trim();
@@ -268,11 +268,30 @@ export class ValidationService {
       }
     };
 
-    // Purchase condition
-    validateCondition(conditions.purchase as { type: string; value: string; value2?: string } | undefined, 'Purchase');
+    const entryCondition = conditions.entry ?? conditions.purchase ?? null;
+    const exitCondition = conditions.exit ?? conditions.sell ?? null;
 
-    // Sell condition
-    validateCondition(conditions.sell as { type: string; value: string; value2?: string } | undefined, 'Sell');
+    validateCondition(entryCondition as { type: string; value: string; value2?: string } | null | undefined, 'Entry');
+    validateCondition(exitCondition as { type: string; value: string; value2?: string } | null | undefined, 'Exit');
+
+    const management = conditions.management;
+    if (management) {
+      if (management.initialStake < 0.5) {
+        errors.push('Management initial stake must be at least 0.5');
+      }
+      if (management.multiplier < 1) {
+        errors.push('Management multiplier must be at least 1');
+      }
+      if (management.maxStake < management.initialStake) {
+        errors.push('Management max stake must be greater than or equal to initial stake');
+      }
+      if (management.profitThreshold < 0) {
+        errors.push('Management profit threshold cannot be negative');
+      }
+      if (management.lossThreshold < 0) {
+        errors.push('Management loss threshold cannot be negative');
+      }
+    }
 
     return errors;
   }

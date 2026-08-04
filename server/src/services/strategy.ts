@@ -2,7 +2,15 @@
  * Strategy Service - Handles strategy parsing and building
  */
 
-import { Strategy, MarketSettings, ExecutionSettings, Conditions, RestartSettings } from '../types/blockly';
+import {
+  MarketSettings,
+  ExecutionSettings,
+  Conditions,
+  Condition,
+  TradeManagement,
+  StrategyVariable,
+  StrategyStat,
+} from '../types/blockly';
 
 export interface ExecutionResult {
   success: boolean;
@@ -31,10 +39,7 @@ export interface StrategySummary {
 export interface ParseResult {
   market: MarketSettings | null;
   execution: ExecutionSettings | null;
-  conditions: {
-    purchase: { type: string; value: string } | null;
-    sell: { type: string; value: string } | null;
-  };
+  conditions: Conditions;
   restart: {
     onWin: { resetStake: number } | null;
     onLoss: { resetStake: number } | null;
@@ -54,8 +59,14 @@ export class StrategyService {
       market: null,
       execution: null,
       conditions: {
+        entry: null,
+        exit: null,
+        management: null,
+        variables: [],
+        notifications: null,
+        stats: [],
         purchase: null,
-        sell: null
+        sell: null,
       },
       restart: {
         onWin: null,
@@ -118,26 +129,98 @@ export class StrategyService {
       };
     }
 
-    // Parse purchase condition
-    const purchMatch = code.match(
-      /PURCHASE_CONDITION\s*=\s*\{[^}]*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"/
+    const parseCondition = (pattern: RegExp): Condition | null => {
+      const match = code.match(pattern);
+      if (!match) return null;
+      return {
+        type: match[1],
+        value: match[2],
+        value2: match[3] ?? '',
+      };
+    };
+
+    strategy.conditions.entry =
+      parseCondition(/ENTRY_CONDITION\s*=\s*\{[^}]*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"[^}]*value2:\s*"([^"]*)"/)
+      ?? parseCondition(/PURCHASE_CONDITION\s*=\s*\{[^}]*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"/);
+
+    strategy.conditions.exit =
+      parseCondition(/EXIT_CONDITION\s*=\s*\{[^}]*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"[^}]*value2:\s*"([^"]*)"/)
+      ?? parseCondition(/SELL_CONDITION\s*=\s*\{[^}]*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"/);
+
+    const managementMatch = code.match(
+      /MARTINGALE_SETTINGS\s*=\s*\{[^}]*initialStake:\s*([\d.]+)[^}]*multiplier:\s*([\d.]+)[^}]*maxStake:\s*([\d.]+)[^}]*profitThreshold:\s*([\d.]+)[^}]*lossThreshold:\s*([\d.]+)[^}]*tradeAgain:\s*(true|false)/i
     );
-    if (purchMatch) {
-      strategy.conditions.purchase = {
-        type: purchMatch[1],
-        value: purchMatch[2]
+    if (managementMatch) {
+      strategy.conditions.management = {
+        initialStake: parseFloat(managementMatch[1]),
+        multiplier: parseFloat(managementMatch[2]),
+        maxStake: parseFloat(managementMatch[3]),
+        profitThreshold: parseFloat(managementMatch[4]),
+        lossThreshold: parseFloat(managementMatch[5]),
+        tradeAgain: managementMatch[6].toLowerCase() === 'true',
       };
     }
 
-    // Parse sell condition
-    const sellMatch = code.match(
-      /SELL_CONDITION\s*=\s*\{[^}]*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"/
+    const notificationMatch = code.match(
+      /__BOT_BUILDER_NOTIFICATIONS\.push\(\{\s*message:\s*"([^"]*)"[^}]*withSound:\s*(true|false)[^}]*withPopup:\s*(true|false)/i
+    ) ?? code.match(
+      /NOTIFICATION_SETTINGS\s*=\s*\{[^}]*message:\s*"([^"]*)"[^}]*withSound:\s*(true|false)[^}]*withPopup:\s*(true|false)/i
     );
-    if (sellMatch) {
-      strategy.conditions.sell = {
-        type: sellMatch[1],
-        value: sellMatch[2]
+    if (notificationMatch) {
+      strategy.conditions.notifications = {
+        message: notificationMatch[1],
+        withSound: notificationMatch[2].toLowerCase() === 'true',
+        withPopup: notificationMatch[3].toLowerCase() === 'true',
       };
+    }
+
+    const statMatches = [
+      ...code.matchAll(/__BOT_BUILDER_STATS\.push\(\{\s*stat:\s*"([^"]*)"/g),
+      ...code.matchAll(/NOTIFICATION_STATS\s*=\s*\{[^}]*stat:\s*"([^"]*)"/g),
+    ];
+    if (statMatches.length > 0) {
+      strategy.conditions.stats = statMatches.map((match) => ({ stat: match[1] }));
+    }
+
+    const logicMatches = [...code.matchAll(/__BOT_BUILDER_LOGIC\.push\(\{\s*type:\s*"([^"]*)"([^}]*)\}\);?/g)];
+    if (logicMatches.length > 0) {
+      strategy.conditions.logic = logicMatches.map((match) => ({
+        type: match[1],
+        raw: match[2] ?? '',
+      }));
+    }
+
+    const listMatches = [...code.matchAll(/__BOT_BUILDER_LISTS\.push\(\{\s*op:\s*"([^"]*)"[^}]*name:\s*"([^"]*)"([^}]*)\}\);?/g)];
+    if (listMatches.length > 0) {
+      strategy.conditions.lists = listMatches.map((match) => ({
+        op: match[1],
+        name: match[2],
+        raw: match[3] ?? '',
+      }));
+    }
+
+    const variableMatches = [
+      ...code.matchAll(/__BOT_BUILDER_VARIABLES\.push\(\{\s*type:\s*"([^"]+)"[^}]*name:\s*"([^"]*)"[^}]*value:\s*(true|false|"[^"]*"|[\d.]+)/gi),
+      ...code.matchAll(/VARIABLE_(BOOL|NUMBER|TEXT)\s*=\s*\{[^}]*name:\s*"([^"]*)"[^}]*value:\s*(true|false|"[^"]*"|[\d.]+)/gi),
+    ];
+    if (variableMatches.length > 0) {
+      strategy.conditions.variables = variableMatches.map((match) => {
+        const kind = String(match[1]).toLowerCase() as StrategyVariable["type"];
+        const rawValue = match[3];
+        let value: string | number | boolean = rawValue;
+        if (rawValue === 'true' || rawValue === 'false') {
+          value = rawValue === 'true';
+        } else if (/^".*"$/.test(rawValue)) {
+          value = rawValue.slice(1, -1);
+        } else {
+          value = Number(rawValue);
+        }
+        return {
+          type: kind,
+          name: match[2],
+          value,
+        };
+      });
     }
 
     // Parse restart on win
@@ -274,14 +357,20 @@ export class StrategyService {
       parts.push(`Duration: ${strategy.execution.duration} ${strategy.execution.durationUnit}`);
     }
 
-    if (strategy.conditions.purchase) {
-      const cond = strategy.conditions.purchase;
-      parts.push(`Buy when: ${cond.type} ${cond.value}`);
+    const entry = strategy.conditions.entry ?? strategy.conditions.purchase;
+    const exit = strategy.conditions.exit ?? strategy.conditions.sell;
+
+    if (entry) {
+      parts.push(`Entry when: ${entry.type} ${entry.value}${entry.value2 ? ` ${entry.value2}` : ''}`);
     }
 
-    if (strategy.conditions.sell) {
-      const cond = strategy.conditions.sell;
-      parts.push(`Sell when: ${cond.type} ${cond.value}`);
+    if (exit) {
+      parts.push(`Exit when: ${exit.type} ${exit.value}`);
+    }
+
+    if (strategy.conditions.management) {
+      const management = strategy.conditions.management as TradeManagement;
+      parts.push(`Management: stake ${management.initialStake} x${management.multiplier}`);
     }
 
     return parts.join(' • ');

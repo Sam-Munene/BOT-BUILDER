@@ -90,11 +90,51 @@ export interface ExecutionSettings {
 }
 
 export interface Conditions {
-  purchase?: Condition;
-  sell?: Condition;
+  entry?: Condition | null;
+  exit?: Condition | null;
+  management?: TradeManagement | null;
+  variables?: StrategyVariable[];
+  notifications?: NotificationSettings | null;
+  stats?: StrategyStat[];
+  logic?: Record<string, any>[];
+  math?: Record<string, any>[];
+  lists?: Record<string, any>[];
+  purchase?: Condition | null;
+  sell?: Condition | null;
 }
 
 export interface Condition {
+  type: string;
+  value: string;
+  value2?: string;
+}
+
+export interface TradeManagement {
+  initialStake: number;
+  multiplier: number;
+  maxStake: number;
+  profitThreshold: number;
+  lossThreshold: number;
+  tradeAgain: boolean;
+}
+
+export interface StrategyVariable {
+  type: "bool" | "number" | "text";
+  name: string;
+  value: string | number | boolean;
+}
+
+export interface NotificationSettings {
+  message: string;
+  withSound: boolean;
+  withPopup: boolean;
+}
+
+export interface StrategyStat {
+  stat: string;
+}
+
+export interface LegacyCondition {
   type: string;
   value: string;
 }

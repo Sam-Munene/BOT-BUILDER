@@ -26,8 +26,14 @@ export const DragDropUI = {
       {
         title: '🔀 Conditions',
         blocks: [
-          { type: 'condition_purchase', label: '📈 Purchase Condition', class: 'bi-condition' },
-          { type: 'condition_sell', label: '📉 Sell Condition', class: 'bi-condition' }
+          { type: 'condition_entry', label: 'Entry Condition', class: 'bi-condition' },
+          { type: 'condition_exit', label: 'Exit Condition', class: 'bi-condition' },
+          { type: 'martingale_settings', label: '🧠 Utility / Risk Settings', class: 'bi-condition' },
+          { type: 'variable_set_bool', label: '✅ Set Boolean', class: 'bi-condition' },
+          { type: 'variable_set_number', label: '🔢 Set Number', class: 'bi-condition' },
+          { type: 'variable_set_text', label: '📝 Set Text', class: 'bi-condition' },
+          { type: 'notification', label: '🔔 Notify', class: 'bi-condition' },
+          { type: 'notification_stats', label: '📊 Current Stats', class: 'bi-condition' }
         ]
       },
       {

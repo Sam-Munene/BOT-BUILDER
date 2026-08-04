@@ -41,6 +41,9 @@ type StrategySnapshot = {
     variables: Array<Record<string, unknown>>;   // All variable blocks
     notifications: Record<string, unknown> | null;
     stats: Array<Record<string, unknown>>;
+    logic: Array<Record<string, unknown>>;
+    math: Array<Record<string, unknown>>;
+    lists: Array<Record<string, unknown>>;
   };
   restart: {
     condition: Record<string, unknown> | null;
@@ -579,30 +582,36 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
   }
 
   // Parse condition blocks - with safety checks
-  const entryCondition = firstBlockByType(blocks, "condition_entry");
-  const exitCondition = firstBlockByType(blocks, "condition_exit");
+  const entryCondition = firstBlockByType(blocks, "condition_entry") ?? firstBlockByType(blocks, "condition_purchase");
+  const exitCondition = firstBlockByType(blocks, "condition_exit") ?? firstBlockByType(blocks, "condition_sell");
   const martingaleSettings = firstBlockByType(blocks, "martingale_settings");
-  const notificationSettings = firstBlockByType(blocks, "notification_setting");
+  const notificationSettings = firstBlockByType(blocks, "notification");
+  const logicBlocks = blocks.filter((block) => ["logic_if", "logic_else", "logic_compare", "logic_gate"].includes(block.type));
+  const mathBlocks = blocks.filter((block) => ["math_operation", "math_current_tick", "math_tick_count"].includes(block.type));
+  const listBlocks = blocks.filter((block) => ["list_create", "list_operation", "list_contains", "list_length"].includes(block.type));
 
   // Collect all variable blocks
   const variableBlocks = blocks.filter(
-    (block) => block.type === "variable_bool" || 
-                block.type === "variable_number" || 
+    (block) => block.type === "variable_set_bool" ||
+                block.type === "variable_set_number" ||
+                block.type === "variable_set_text" ||
+                block.type === "variable_bool" ||
+                block.type === "variable_number" ||
                 block.type === "variable_text"
   );
 
-  const statsBlocks = blocks.filter((block) => block.type === "strategy_stats");
+  const statsBlocks = blocks.filter((block) => block.type === "notification_stats" || block.type === "strategy_stats");
 
   // Build conditions object with safety checks
   result.conditions = {
     entry: entryCondition ? {
-      condition: safeString(entryCondition.values?.CONDITION ?? "ALWAYS"),
+      type: safeString(entryCondition.values?.CONDITION ?? "ALWAYS"),
       value: safeString(entryCondition.values?.VALUE ?? ""),
       value2: safeString(entryCondition.values?.VALUE_2 ?? ""),
     } : null,
     
     exit: exitCondition ? {
-      condition: safeString(exitCondition.values?.CONDITION ?? "SELL_BY_COUNT_DOWN"),
+      type: safeString(exitCondition.values?.CONDITION ?? "SELL_BY_COUNT_DOWN"),
       value: safeString(exitCondition.values?.VALUE ?? ""),
     } : null,
     
@@ -616,19 +625,19 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
     } : null,
     
     variables: variableBlocks.map((block) => {
-      if (block.type === "variable_bool") {
+      if (block.type === "variable_set_bool" || block.type === "variable_bool") {
         return {
           type: "bool",
           name: safeString(block.values?.VAR_NAME ?? ""),
           value: asBoolean(block.values?.VAR_VALUE ?? false),
         };
-      } else if (block.type === "variable_number") {
+      } else if (block.type === "variable_set_number" || block.type === "variable_number") {
         return {
           type: "number",
           name: safeString(block.values?.VAR_NAME ?? ""),
           value: asNumber(block.values?.VAR_VALUE ?? 0, 0),
         };
-      } else if (block.type === "variable_text") {
+      } else if (block.type === "variable_set_text" || block.type === "variable_text") {
         return {
           type: "text",
           name: safeString(block.values?.VAR_NAME ?? ""),
@@ -639,16 +648,25 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
     }).filter(Boolean),
     
     notifications: notificationSettings ? {
-      notifyStake: asBoolean(notificationSettings.values?.NOTIFY_STAKE ?? true),
-      notifyLoss: asBoolean(notificationSettings.values?.NOTIFY_LOSS ?? true),
-      notifyProfit: asBoolean(notificationSettings.values?.NOTIFY_PROFIT ?? true),
-      notifyTrade: asBoolean(notificationSettings.values?.NOTIFY_TRADE ?? true),
+      message: safeString(notificationSettings.values?.MESSAGE ?? "Trade executed"),
+      withSound: asBoolean(notificationSettings.values?.WITH_SOUND ?? true),
+      withPopup: asBoolean(notificationSettings.values?.WITH_POPUP ?? true),
     } : null,
     
     stats: statsBlocks.map((block) => ({
-      name: safeString(block.values?.STAT_NAME ?? ""),
-      type: safeString(block.values?.STAT_TYPE ?? "number"),
-      initialValue: safeString(block.values?.INITIAL_VALUE ?? "0"),
+      stat: safeString(block.values?.STAT ?? "totalProfit"),
+    })),
+    logic: logicBlocks.map((block) => ({
+      type: block.type,
+      values: block.values,
+    })),
+    math: mathBlocks.map((block) => ({
+      type: block.type,
+      values: block.values,
+    })),
+    lists: listBlocks.map((block) => ({
+      type: block.type,
+      values: block.values,
     })),
   };
 
@@ -4123,9 +4141,9 @@ class BotBuilderApp {
       for (const section of [
         { id: "market", height: 200 },
         { id: "execution", height: 400 },
-        { id: "conditions", height: 640 },
-        { id: "indicators", height: 100 },
-        { id: "restart", height: 100 },
+        { id: "conditions", height: 980 },
+        { id: "indicators", height: 180 },
+        { id: "restart", height: 140 },
       ] as Array<{ id: SectionId; height: number }>) {
         const sectionBlock = this.workspace.newBlock(getSectionBlockType(section.id));
         sectionBlock.initSvg();
@@ -4193,7 +4211,7 @@ class BotBuilderApp {
         }
 
         // 3d. Boolean Variable - isBought
-        const boolVarBlock = this.safeCreateBlock("variable_bool");
+        const boolVarBlock = this.safeCreateBlock("variable_set_bool");
         if (boolVarBlock) {
           boolVarBlock.setFieldValue("isBought", "VAR_NAME");
           boolVarBlock.setFieldValue("FALSE", "VAR_VALUE");
@@ -4201,7 +4219,7 @@ class BotBuilderApp {
         }
 
         // 3e. Number Variable - currentStake
-        const numVarBlock = this.safeCreateBlock("variable_number");
+        const numVarBlock = this.safeCreateBlock("variable_set_number");
         if (numVarBlock) {
           numVarBlock.setFieldValue("currentStake", "VAR_NAME");
           numVarBlock.setFieldValue("10", "VAR_VALUE");
@@ -4209,7 +4227,7 @@ class BotBuilderApp {
         }
 
         // 3f. Text Variable - notification
-        const textVarBlock = this.safeCreateBlock("variable_text");
+        const textVarBlock = this.safeCreateBlock("variable_set_text");
         if (textVarBlock) {
           textVarBlock.setFieldValue("notification", "VAR_NAME");
           textVarBlock.setFieldValue("Trade executed", "VAR_VALUE");
@@ -4217,21 +4235,18 @@ class BotBuilderApp {
         }
 
         // 3g. Notification Settings
-        const notificationBlock = this.safeCreateBlock("notification_setting");
+        const notificationBlock = this.safeCreateBlock("notification");
         if (notificationBlock) {
-          notificationBlock.setFieldValue("TRUE", "NOTIFY_STAKE");
-          notificationBlock.setFieldValue("TRUE", "NOTIFY_LOSS");
-          notificationBlock.setFieldValue("TRUE", "NOTIFY_PROFIT");
-          notificationBlock.setFieldValue("TRUE", "NOTIFY_TRADE");
+          notificationBlock.setFieldValue("Trade executed", "MESSAGE");
+          notificationBlock.setFieldValue("TRUE", "WITH_SOUND");
+          notificationBlock.setFieldValue("TRUE", "WITH_POPUP");
           conditionsBlocks.push(notificationBlock);
         }
 
         // 3h. Strategy Stats - totalProfit
-        const statsBlock = this.safeCreateBlock("strategy_stats");
+        const statsBlock = this.safeCreateBlock("notification_stats");
         if (statsBlock) {
-          statsBlock.setFieldValue("totalProfit", "STAT_NAME");
-          statsBlock.setFieldValue("number", "STAT_TYPE");
-          statsBlock.setFieldValue("0", "INITIAL_VALUE");
+          statsBlock.setFieldValue("totalProfit", "STAT");
           conditionsBlocks.push(statsBlock);
         }
 
@@ -4341,6 +4356,9 @@ class BotBuilderApp {
         variables: [],
         notifications: null,
         stats: [],
+        logic: [],
+        math: [],
+        lists: [],
       },
       restart: (domain.restart as StrategySnapshot["restart"] | undefined) ?? {
         condition: null,
