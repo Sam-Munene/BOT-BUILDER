@@ -58,6 +58,7 @@ export const PanelsUI = {
     const strategy: any = { 
       market: null, 
       execution: null, 
+      indicators: [],
       conditions: { entry: null, exit: null, management: null, variables: [], notifications: null, stats: [] },
       restart: { onWin: null, onLoss: null }
     };
@@ -120,6 +121,28 @@ export const PanelsUI = {
           profitThreshold: parseFloat(managementMatch[4]) || 100,
           lossThreshold: parseFloat(managementMatch[5]) || 50,
           tradeAgain: managementMatch[6].toLowerCase() === 'true'
+        };
+      }
+
+      const indicatorsSettingsMatch = code.match(/INDICATORS_SETTINGS\s*=\s*\{[^}]*indicator:\s*"([^"]*)"[^}]*period:\s*([\d.]+)[^}]*symbol:\s*"([^"]*)"[^}]*active:\s*(true|false)[^}]*comparison:\s*\{[^}]*left:\s*"([^"]*)"[^}]*operator:\s*"([^"]*)"[^}]*threshold:\s*([\d.]+)/i);
+      if (indicatorsSettingsMatch) {
+        strategy.indicators = [{
+          type: indicatorsSettingsMatch[1] || 'none',
+          period: parseFloat(indicatorsSettingsMatch[2]) || 14,
+          symbol: indicatorsSettingsMatch[3] || 'VIX_100',
+          active: indicatorsSettingsMatch[4].toLowerCase() === 'true',
+          comparison: {
+            left: indicatorsSettingsMatch[5] || 'indicator',
+            operator: indicatorsSettingsMatch[6] || 'GT',
+            threshold: parseFloat(indicatorsSettingsMatch[7]) || 50
+          }
+        }];
+      }
+
+      const restartSettingsMatch = code.match(/RESTART_SETTINGS\s*=\s*\{\s*condition:\s*\{\s*type:\s*"([^"]*)"\s*\}\s*\}/i);
+      if (restartSettingsMatch) {
+        strategy.restart.condition = {
+          type: restartSettingsMatch[1] || 'AFTER_LOSS'
         };
       }
 

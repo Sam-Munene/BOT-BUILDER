@@ -39,8 +39,10 @@ export interface StrategySummary {
 export interface ParseResult {
   market: MarketSettings | null;
   execution: ExecutionSettings | null;
+  indicators: Array<Record<string, any>>;
   conditions: Conditions;
   restart: {
+    condition?: { type: string } | null;
     onWin: { resetStake: number } | null;
     onLoss: { resetStake: number } | null;
   };
@@ -58,6 +60,7 @@ export class StrategyService {
     const strategy: ParseResult = {
       market: null,
       execution: null,
+      indicators: [],
       conditions: {
         entry: null,
         exit: null,
@@ -69,6 +72,7 @@ export class StrategyService {
         sell: null,
       },
       restart: {
+        condition: null,
         onWin: null,
         onLoss: null
       },
@@ -158,6 +162,32 @@ export class StrategyService {
         profitThreshold: parseFloat(managementMatch[4]),
         lossThreshold: parseFloat(managementMatch[5]),
         tradeAgain: managementMatch[6].toLowerCase() === 'true',
+      };
+    }
+
+    const indicatorsSettingsMatch = code.match(
+      /INDICATORS_SETTINGS\s*=\s*\{[^}]*indicator:\s*"([^"]*)"[^}]*period:\s*([\d.]+)[^}]*symbol:\s*"([^"]*)"[^}]*active:\s*(true|false)[^}]*comparison:\s*\{[^}]*left:\s*"([^"]*)"[^}]*operator:\s*"([^"]*)"[^}]*threshold:\s*([\d.]+)/i
+    );
+    if (indicatorsSettingsMatch) {
+      strategy.indicators.push({
+        type: indicatorsSettingsMatch[1],
+        period: parseFloat(indicatorsSettingsMatch[2]),
+        symbol: indicatorsSettingsMatch[3],
+        active: indicatorsSettingsMatch[4].toLowerCase() === 'true',
+        comparison: {
+          left: indicatorsSettingsMatch[5],
+          operator: indicatorsSettingsMatch[6],
+          threshold: parseFloat(indicatorsSettingsMatch[7]),
+        },
+      });
+    }
+
+    const restartSettingsMatch = code.match(
+      /RESTART_SETTINGS\s*=\s*\{\s*condition:\s*\{\s*type:\s*"([^"]*)"\s*\}\s*\}/i
+    );
+    if (restartSettingsMatch) {
+      strategy.restart.condition = {
+        type: restartSettingsMatch[1],
       };
     }
 

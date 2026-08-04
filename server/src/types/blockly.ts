@@ -64,6 +64,7 @@ export interface BlocklyInterface {
 export interface Strategy {
   market?: MarketSettings;
   execution?: ExecutionSettings;
+  indicators?: Array<Record<string, unknown>>;
   conditions?: Conditions;
   restart?: RestartSettings;
   variables?: Record<string, any>;
@@ -140,8 +141,13 @@ export interface LegacyCondition {
 }
 
 export interface RestartSettings {
+  condition?: RestartCondition | null;
   onWin?: ResetStake;
   onLoss?: ResetStake;
+}
+
+export interface RestartCondition {
+  type: string;
 }
 
 export interface ResetStake {

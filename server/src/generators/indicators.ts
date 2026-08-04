@@ -38,5 +38,16 @@ export function registerIndicatorGenerators(Blockly: BlocklyInterface): void {
     return [`${indicator} ${opMap[operator]} ${threshold}`, Blockly.JavaScript.ORDER_RELATIONAL];
   };
 
+  Blockly.JavaScript['indicators_settings'] = function(block: BlocklyBlock): string {
+    const indicator = block.getFieldValue('INDICATOR') || 'none';
+    const period = block.getFieldValue('PERIOD') || 14;
+    const symbol = block.getFieldValue('SYMBOL') || 'VIX_100';
+    const active = String(block.getFieldValue('ACTIVE') ?? 'TRUE').toUpperCase() === 'TRUE';
+    const left = block.getFieldValue('LEFT') || 'indicator';
+    const operator = block.getFieldValue('OPERATOR') || 'GT';
+    const threshold = block.getFieldValue('THRESHOLD') || 50;
+    return `const INDICATORS_SETTINGS = {\n  indicator: "${indicator}",\n  period: ${period},\n  symbol: "${symbol}",\n  active: ${active},\n  comparison: {\n    left: "${left}",\n    operator: "${operator}",\n    threshold: ${threshold}\n  }\n};\n`;
+  };
+
   console.log('✅ Indicator generators registered');
 }

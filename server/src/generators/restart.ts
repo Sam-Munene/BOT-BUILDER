@@ -23,5 +23,10 @@ export function registerRestartGenerators(Blockly: BlocklyInterface): void {
     return `// Restart on Loss\nconst RESTART_LOSS = {\n  resetStake: ${stake}\n};\n`;
   };
 
+  Blockly.JavaScript['restart_settings'] = function(block: BlocklyBlock): string {
+    const condition = block.getFieldValue('CONDITION') || 'AFTER_LOSS';
+    return `const RESTART_SETTINGS = {\n  condition: {\n    type: "${condition}"\n  }\n};\n`;
+  };
+
   console.log('✅ Restart generators registered');
 }

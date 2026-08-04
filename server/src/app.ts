@@ -774,6 +774,14 @@ function createApiPayload(strategy: StrategySnapshot): Record<string, unknown> |
     }
   }
 
+  if (Array.isArray(strategy.indicators) && strategy.indicators.length > 0) {
+    payload.indicators = strategy.indicators;
+  }
+
+  if (strategy.restart) {
+    payload.restart = strategy.restart;
+  }
+
   return payload;
 }
 
@@ -4395,6 +4403,7 @@ class BotBuilderApp {
     const validation = validationService.validateStrategy({
       market: snapshot.market as any,
       execution: snapshot.execution as any,
+      indicators: snapshot.indicators as any,
       conditions: snapshot.conditions as any,
       restart: snapshot.restart as any,
     });

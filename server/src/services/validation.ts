@@ -59,6 +59,16 @@ export class ValidationService {
       errors.push(...conditionErrors);
     }
 
+    if (strategy.indicators) {
+      const indicatorErrors = this.validateIndicators(strategy.indicators);
+      errors.push(...indicatorErrors);
+    }
+
+    if (strategy.restart) {
+      const restartErrors = this.validateRestart(strategy.restart);
+      errors.push(...restartErrors);
+    }
+
     // Validate position manager
     if (strategy.positionManager) {
       const posErrors = this.validatePositionManager(strategy.positionManager);
@@ -312,6 +322,74 @@ export class ValidationService {
 
     if (positionManager.takeProfit < 0 || positionManager.takeProfit > 100) {
       errors.push('Take profit must be between 0 and 100');
+    }
+
+    return errors;
+  }
+
+  /**
+   * Validate indicator configuration
+   */
+  private validateIndicators(indicators: Array<Record<string, unknown>>): string[] {
+    const errors: string[] = [];
+    const supportedOperators = new Set(['GT', 'LT', 'GTE', 'LTE', 'EQ', 'NEQ']);
+
+    indicators.forEach((indicator, index) => {
+      const type = String(indicator.type ?? '').trim();
+      const left = String(indicator.left ?? '').trim();
+
+      if (type) {
+        const period = Number(indicator.period ?? 0);
+        if (!type) {
+          errors.push(`Indicator ${index + 1} type is required`);
+        }
+        if (!Number.isFinite(period) || period <= 0) {
+          errors.push(`Indicator ${index + 1} period must be greater than 0`);
+        }
+        const symbol = String(indicator.symbol ?? '').trim();
+        if (!symbol) {
+          errors.push(`Indicator ${index + 1} symbol is required`);
+        }
+        return;
+      }
+
+      if (left) {
+        const operator = String(indicator.operator ?? '').trim().toUpperCase();
+        const threshold = Number(indicator.threshold ?? NaN);
+        if (!supportedOperators.has(operator)) {
+          errors.push(`Indicator ${index + 1} operator is invalid`);
+        }
+        if (!Number.isFinite(threshold)) {
+          errors.push(`Indicator ${index + 1} threshold must be a number`);
+        }
+      }
+    });
+
+    return errors;
+  }
+
+  /**
+   * Validate restart configuration
+   */
+  private validateRestart(restart: { condition?: { type?: string } | null; onWin?: { resetStake: number } | null; onLoss?: { resetStake: number } | null }): string[] {
+    const errors: string[] = [];
+    const restartType = String(restart.condition?.type ?? '').trim().toUpperCase();
+
+    if (restart.condition) {
+      const allowed = new Set(['AFTER_WIN', 'AFTER_LOSS', 'AFTER_WIN_OR_LOSS']);
+      if (!restartType) {
+        errors.push('Restart condition type is required');
+      } else if (!allowed.has(restartType)) {
+        errors.push('Restart condition type is invalid');
+      }
+    }
+
+    if (restart.onWin && restart.onWin.resetStake <= 0) {
+      errors.push('Restart on win stake must be greater than 0');
+    }
+
+    if (restart.onLoss && restart.onLoss.resetStake <= 0) {
+      errors.push('Restart on loss stake must be greater than 0');
     }
 
     return errors;
