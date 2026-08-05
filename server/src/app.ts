@@ -322,7 +322,7 @@ function buildTemplateJson(template: BlockTemplate): any {
   if (template.type === "condition_exit") {
     return {
       message0: template.title,
-      message1: "Condition %1",
+      message1: "When %1 Value %2",
       args1: [
         {
           type: "field_dropdown",
@@ -341,21 +341,20 @@ function buildTemplateJson(template: BlockTemplate): any {
             ["Duration Elapsed", "DURATION_ELAPSED"],
           ],
         },
+        { type: "field_input", name: "VALUE", text: "5" },
       ],
-      message2: "Value %1",
-      args2: [{ type: "field_input", name: "VALUE", text: "5" }],
       previousStatement: null,
       nextStatement: null,
       colour: template.color,
       tooltip: template.description,
-      inputsInline: false,
+      inputsInline: true,
     };
   }
 
   if (template.type === "condition_entry") {
     return {
       message0: template.title,
-      message1: "Condition %1",
+      message1: "When %1 Value %2 Value 2 %3",
       args1: [
         {
           type: "field_dropdown",
@@ -375,16 +374,14 @@ function buildTemplateJson(template: BlockTemplate): any {
             ["Duration Elapsed", "DURATION_ELAPSED"],
           ],
         },
+        { type: "field_input", name: "VALUE", text: "" },
+        { type: "field_input", name: "VALUE_2", text: "" },
       ],
-      message2: "Value %1",
-      args2: [{ type: "field_input", name: "VALUE", text: "" }],
-      message3: "Value 2 %1",
-      args3: [{ type: "field_input", name: "VALUE_2", text: "" }],
       previousStatement: null,
       nextStatement: null,
       colour: template.color,
       tooltip: template.description,
-      inputsInline: false,
+      inputsInline: true,
     };
   }
 
@@ -3468,9 +3465,18 @@ class BotBuilderApp {
     if (kicker) kicker.textContent = category.title;
 
     if (list) {
-      list.innerHTML = category.groups
-        .map((group) => this.renderGroup(group.id, group.title, group.description, templates))
-        .join("");
+      const guidance = category.id === "conditions"
+        ? `
+          <div class="bb-modal-guidance">
+            <strong>Start with the core blocks.</strong>
+            <span>Add the optional blocks only when you need them.</span>
+          </div>
+        `
+        : "";
+
+      list.innerHTML = `${guidance}${category.groups
+        .map((group) => this.renderGroup(category.id, group.id, group.title, group.description, templates))
+        .join("")}`;
     }
 
     if (detail && this.modalState.templateType) {
@@ -3487,9 +3493,10 @@ class BotBuilderApp {
   private renderTemplateCard(template: BlockTemplate): string {
     const fieldKinds = template.fields.map((field) => field.kind);
     const chips = fieldKinds.map((kind) => `<span class="bb-chip">${kind}</span>`).join("");
+    const featured = template.categoryId === "conditions" && ["entry", "exit", "management"].includes(template.groupId);
     return `
       <button
-        class="bb-template-card ${this.modalState.templateType === template.type ? "is-selected" : ""}"
+        class="bb-template-card ${featured ? "bb-template-card--featured" : ""} ${this.modalState.templateType === template.type ? "is-selected" : ""}"
         type="button"
         data-template="${template.type}"
         data-group="${template.groupId}"
@@ -3506,12 +3513,18 @@ class BotBuilderApp {
     `;
   }
 
-  private renderGroup(groupId: string, title: string, description: string, templates: BlockTemplate[]): string {
+  private renderGroup(categoryId: string, groupId: string, title: string, description: string, templates: BlockTemplate[]): string {
     const groupTemplates = templates.filter((template) => template.groupId === groupId);
     const cards = groupTemplates.map((template) => this.renderTemplateCard(template)).join("");
+    const featuredGroups = new Set(["entry", "exit", "management"]);
+    const groupTone = categoryId === "conditions" && featuredGroups.has(groupId)
+      ? "bb-group--featured"
+      : categoryId === "conditions"
+        ? "bb-group--optional"
+        : "";
 
     return `
-      <section class="bb-group" data-group-panel="${groupId}">
+      <section class="bb-group ${groupTone}" data-group-panel="${groupId}">
         <header class="bb-group-header">
           <div>
             <h4>${title}</h4>
@@ -4149,7 +4162,7 @@ class BotBuilderApp {
       for (const section of [
         { id: "market", height: 200 },
         { id: "execution", height: 400 },
-        { id: "conditions", height: 980 },
+        { id: "conditions", height: 300 },
         { id: "indicators", height: 180 },
         { id: "restart", height: 140 },
       ] as Array<{ id: SectionId; height: number }>) {
@@ -4204,58 +4217,6 @@ class BotBuilderApp {
           exitConditionBlock.setFieldValue("SELL_BY_COUNT_DOWN", "CONDITION");
           exitConditionBlock.setFieldValue("5", "VALUE");
           conditionsBlocks.push(exitConditionBlock);
-        }
-
-        // 3c. Martingale Settings
-        const martingaleBlock = this.safeCreateBlock("martingale_settings");
-        if (martingaleBlock) {
-          martingaleBlock.setFieldValue("10", "INITIAL_STAKE");
-          martingaleBlock.setFieldValue("2", "MULTIPLIER");
-          martingaleBlock.setFieldValue("50", "MAX_STAKE");
-          martingaleBlock.setFieldValue("100", "PROFIT_THRESHOLD");
-          martingaleBlock.setFieldValue("50", "LOSS_THRESHOLD");
-          martingaleBlock.setFieldValue("TRUE", "TRADE_AGAIN");
-          conditionsBlocks.push(martingaleBlock);
-        }
-
-        // 3d. Boolean Variable - isBought
-        const boolVarBlock = this.safeCreateBlock("variable_set_bool");
-        if (boolVarBlock) {
-          boolVarBlock.setFieldValue("isBought", "VAR_NAME");
-          boolVarBlock.setFieldValue("FALSE", "VAR_VALUE");
-          conditionsBlocks.push(boolVarBlock);
-        }
-
-        // 3e. Number Variable - currentStake
-        const numVarBlock = this.safeCreateBlock("variable_set_number");
-        if (numVarBlock) {
-          numVarBlock.setFieldValue("currentStake", "VAR_NAME");
-          numVarBlock.setFieldValue("10", "VAR_VALUE");
-          conditionsBlocks.push(numVarBlock);
-        }
-
-        // 3f. Text Variable - notification
-        const textVarBlock = this.safeCreateBlock("variable_set_text");
-        if (textVarBlock) {
-          textVarBlock.setFieldValue("notification", "VAR_NAME");
-          textVarBlock.setFieldValue("Trade executed", "VAR_VALUE");
-          conditionsBlocks.push(textVarBlock);
-        }
-
-        // 3g. Notification Settings
-        const notificationBlock = this.safeCreateBlock("notification");
-        if (notificationBlock) {
-          notificationBlock.setFieldValue("Trade executed", "MESSAGE");
-          notificationBlock.setFieldValue("TRUE", "WITH_SOUND");
-          notificationBlock.setFieldValue("TRUE", "WITH_POPUP");
-          conditionsBlocks.push(notificationBlock);
-        }
-
-        // 3h. Strategy Stats - totalProfit
-        const statsBlock = this.safeCreateBlock("notification_stats");
-        if (statsBlock) {
-          statsBlock.setFieldValue("totalProfit", "STAT");
-          conditionsBlocks.push(statsBlock);
         }
 
         sections[2].blocks = conditionsBlocks;

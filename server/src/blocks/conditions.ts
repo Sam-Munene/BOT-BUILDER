@@ -11,18 +11,19 @@ export function registerConditionBlocks(Blockly: BlocklyInterface): void {
       this.jsonInit({
         type: 'condition_entry',
         message0: '📈 Entry Condition',
-        message1: 'When %1',
-        args1: [{
-          type: 'field_dropdown',
-          name: 'CONDITION',
-          options: [['Always', 'ALWAYS']],
-        }],
-        message2: 'Value %1',
-        args2: [{ type: 'field_input', name: 'VALUE', text: '100' }],
-        message3: 'Value 2 %1',
-        args3: [{ type: 'field_input', name: 'VALUE_2', text: '' }],
+        message1: 'When %1 Value %2 Value 2 %3',
+        args1: [
+          {
+            type: 'field_dropdown',
+            name: 'CONDITION',
+            options: [['Always', 'ALWAYS']],
+          },
+          { type: 'field_input', name: 'VALUE', text: '100' },
+          { type: 'field_input', name: 'VALUE_2', text: '' },
+        ],
         colour: '#92400e',
         tooltip: 'Define when to enter a trade',
+        inputsInline: true,
       });
     }
   };
@@ -32,16 +33,18 @@ export function registerConditionBlocks(Blockly: BlocklyInterface): void {
       this.jsonInit({
         type: 'condition_exit',
         message0: '📉 Exit Condition',
-        message1: 'When %1',
-        args1: [{
-          type: 'field_dropdown',
-          name: 'CONDITION',
-          options: [['Sell by Count Down', 'SELL_BY_COUNT_DOWN']],
-        }],
-        message2: 'Value %1',
-        args2: [{ type: 'field_input', name: 'VALUE', text: '5' }],
+        message1: 'When %1 Value %2',
+        args1: [
+          {
+            type: 'field_dropdown',
+            name: 'CONDITION',
+            options: [['Sell by Count Down', 'SELL_BY_COUNT_DOWN']],
+          },
+          { type: 'field_input', name: 'VALUE', text: '5' },
+        ],
         colour: '#92400e',
         tooltip: 'Define when to exit a trade',
+        inputsInline: true,
       });
     }
   };

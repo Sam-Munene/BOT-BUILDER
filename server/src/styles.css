@@ -941,6 +941,27 @@ button {
   gap: 8px;
 }
 
+.bb-modal-guidance {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(255, 255, 255, 0.98));
+}
+
+.bb-modal-guidance strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.bb-modal-guidance span {
+  color: var(--bb-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .bb-group {
   display: grid;
   gap: 7px;
@@ -948,6 +969,17 @@ button {
   border: 1px solid var(--bb-border-soft);
   border-radius: 22px;
   background: #ffffff;
+}
+
+.bb-group--featured {
+  grid-column: 1 / -1;
+  padding: 12px;
+  border-color: rgba(245, 158, 11, 0.24);
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.96), rgba(255, 255, 255, 0.98));
+}
+
+.bb-group--optional {
+  background: #fcfcfd;
 }
 
 .bb-group-header {
@@ -1018,6 +1050,19 @@ button {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--template-accent) 45%, transparent);
   background: #f8fafc;
+}
+
+.bb-template-card--featured {
+  border-color: rgba(245, 158, 11, 0.2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(255, 251, 235, 0.96));
+}
+
+.bb-group--featured .bb-template-card {
+  border-color: rgba(245, 158, 11, 0.22);
+}
+
+.bb-group--optional .bb-template-card {
+  opacity: 0.96;
 }
 
 .bb-template-title strong {

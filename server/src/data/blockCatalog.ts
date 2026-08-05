@@ -134,11 +134,14 @@ export const CATEGORY_DEFINITIONS: CategoryDefinition[] = [
     accent: "#f59e0b",
     sectionId: "conditions",
     groups: [
-      { id: "entry", title: "Entry Conditions", description: "When to open a trade." },
-      { id: "exit", title: "Exit Conditions", description: "When to close a trade." },
-      { id: "management", title: "Trade Management", description: "Martingale, stop loss, take profit." },
-      { id: "variables", title: "Variables", description: "Set and manage strategy variables." },
-      { id: "notifications", title: "Notifications", description: "Alert and notification settings." },
+      { id: "entry", title: "Entry Conditions", description: "Start here. When to open a trade." },
+      { id: "exit", title: "Exit Conditions", description: "Start here. When to close a trade." },
+      { id: "management", title: "Trade Management", description: "Start here. Martingale, stop loss, take profit." },
+      { id: "variables", title: "Variables", description: "Optional helpers for strategy state." },
+      { id: "notifications", title: "Notifications", description: "Optional alert and notification blocks." },
+      { id: "logic", title: "Logic", description: "Optional decision blocks and comparisons." },
+      { id: "math", title: "Math", description: "Optional math helpers and tick values." },
+      { id: "lists", title: "Lists", description: "Optional list helpers and checks." },
     ],
   },
   {
@@ -1755,7 +1758,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
       {
         kind: "dropdown",
         name: "CONDITION",
-        label: "Condition",
+        label: "When",
         defaultValue: "ALWAYS",
         options: [
           { label: "Always", value: "ALWAYS" },
@@ -1803,7 +1806,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
       {
         kind: "dropdown",
         name: "CONDITION",
-        label: "Condition",
+        label: "When",
         defaultValue: "SELL_BY_COUNT_DOWN",
         options: [
           { label: "Sell by Count Down", value: "SELL_BY_COUNT_DOWN" },
