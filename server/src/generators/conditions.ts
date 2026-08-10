@@ -38,6 +38,13 @@ function toJsArrayLiteral(raw: unknown): string {
   return `[${values.join(', ')}]`;
 }
 
+function inferExitGroup(type: string): string {
+  const normalized = String(type ?? '').trim().toUpperCase();
+  if (['TIME_OF_DAY', 'DURATION_ELAPSED', 'SELL_BY_COUNT_DOWN'].includes(normalized)) return 'time';
+  if (['STOP_LOSS_HIT', 'TAKE_PROFIT_HIT', 'SELL_BY_TAKE_PROFIT'].includes(normalized)) return 'risk';
+  return 'price';
+}
+
 export function registerConditionGenerators(Blockly: BlocklyInterface): void {
   if (!Blockly || !Blockly.JavaScript) {
     console.error('Blockly.JavaScript not available');
@@ -54,7 +61,8 @@ export function registerConditionGenerators(Blockly: BlocklyInterface): void {
   Blockly.JavaScript['condition_exit'] = function(block: BlocklyBlock): string {
     const condition = asJsString(block.getFieldValue('CONDITION') || 'SELL_BY_COUNT_DOWN');
     const value = asJsString(block.getFieldValue('VALUE') || '');
-    return `const EXIT_CONDITION = {\n  type: ${condition},\n  value: ${value}\n};\n`;
+    const group = asJsString(inferExitGroup(block.getFieldValue('CONDITION') || 'SELL_BY_COUNT_DOWN'));
+    return `globalThis.__BOT_BUILDER_EXIT_CONDITIONS = globalThis.__BOT_BUILDER_EXIT_CONDITIONS || [];\nglobalThis.__BOT_BUILDER_EXIT_CONDITIONS.push({ type: ${condition}, value: ${value}, group: ${group} });\n`;
   };
 
   Blockly.JavaScript['martingale_settings'] = function(block: BlocklyBlock): string {

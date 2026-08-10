@@ -51,6 +51,13 @@ export interface ParseResult {
   _api_payload?: any;
 }
 
+function inferExitGroup(type: string): string {
+  const normalized = String(type ?? '').trim().toUpperCase();
+  if (['TIME_OF_DAY', 'DURATION_ELAPSED', 'SELL_BY_COUNT_DOWN'].includes(normalized)) return 'time';
+  if (['STOP_LOSS_HIT', 'TAKE_PROFIT_HIT', 'SELL_BY_TAKE_PROFIT'].includes(normalized)) return 'risk';
+  return 'price';
+}
+
 export class StrategyService {
   /**
    * Parse strategy from generated code
@@ -64,6 +71,7 @@ export class StrategyService {
       conditions: {
         entry: null,
         exit: null,
+        exits: [],
         management: null,
         variables: [],
         notifications: null,
@@ -150,6 +158,19 @@ export class StrategyService {
     strategy.conditions.exit =
       parseCondition(/EXIT_CONDITION\s*=\s*\{[^}]*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"[^}]*value2:\s*"([^"]*)"/)
       ?? parseCondition(/SELL_CONDITION\s*=\s*\{[^}]*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"/);
+
+    const exitBlockMatches = [
+      ...code.matchAll(/__BOT_BUILDER_EXIT_CONDITIONS\.push\(\{\s*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"[^}]*group:\s*"([^"]*)"/g),
+      ...code.matchAll(/EXIT_CONDITION_\d+\s*=\s*\{[^}]*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"[^}]*group:\s*"([^"]*)"/g),
+    ];
+    if (exitBlockMatches.length > 0) {
+      strategy.conditions.exits = exitBlockMatches.map((match) => ({
+        type: match[1],
+        value: match[2],
+        group: match[3] || inferExitGroup(match[1]),
+      }));
+      strategy.conditions.exit = strategy.conditions.exit ?? strategy.conditions.exits[0] ?? null;
+    }
 
     const managementMatch = code.match(
       /MARTINGALE_SETTINGS\s*=\s*\{[^}]*initialStake:\s*([\d.]+)[^}]*multiplier:\s*([\d.]+)[^}]*maxStake:\s*([\d.]+)[^}]*profitThreshold:\s*([\d.]+)[^}]*lossThreshold:\s*([\d.]+)[^}]*tradeAgain:\s*(true|false)/i
@@ -388,7 +409,7 @@ export class StrategyService {
     }
 
     const entry = strategy.conditions.entry ?? strategy.conditions.purchase;
-    const exit = strategy.conditions.exit ?? strategy.conditions.sell;
+    const exit = strategy.conditions.exits?.length ? strategy.conditions.exits[0] : (strategy.conditions.exit ?? strategy.conditions.sell);
 
     if (entry) {
       parts.push(`Entry when: ${entry.type} ${entry.value}${entry.value2 ? ` ${entry.value2}` : ''}`);
@@ -396,6 +417,13 @@ export class StrategyService {
 
     if (exit) {
       parts.push(`Exit when: ${exit.type} ${exit.value}`);
+    }
+
+    if (strategy.conditions.exits && strategy.conditions.exits.length > 1) {
+      const grouped = strategy.conditions.exits
+        .map((condition) => `${condition.group ?? inferExitGroup(condition.type)}: ${condition.type}${condition.value ? ` ${condition.value}` : ''}`)
+        .join(' | ');
+      parts.push(`Exit groups: ${grouped}`);
     }
 
     if (strategy.conditions.management) {

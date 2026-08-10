@@ -322,7 +322,7 @@ function buildTemplateJson(template: BlockTemplate): any {
   if (template.type === "condition_exit") {
     return {
       message0: template.title,
-      message1: "When %1 Value %2",
+      message1: "When %1",
       args1: [
         {
           type: "field_dropdown",
@@ -341,20 +341,18 @@ function buildTemplateJson(template: BlockTemplate): any {
             ["Duration Elapsed", "DURATION_ELAPSED"],
           ],
         },
-        { type: "field_input", name: "VALUE", text: "5" },
       ],
       previousStatement: null,
       nextStatement: null,
       colour: template.color,
       tooltip: template.description,
-      inputsInline: true,
     };
   }
 
   if (template.type === "condition_entry") {
     return {
       message0: template.title,
-      message1: "When %1 Value %2 Value 2 %3",
+      message1: "When %1",
       args1: [
         {
           type: "field_dropdown",
@@ -374,13 +372,70 @@ function buildTemplateJson(template: BlockTemplate): any {
             ["Duration Elapsed", "DURATION_ELAPSED"],
           ],
         },
-        { type: "field_input", name: "VALUE", text: "" },
-        { type: "field_input", name: "VALUE_2", text: "" },
       ],
       previousStatement: null,
       nextStatement: null,
       colour: template.color,
       tooltip: template.description,
+    };
+  }
+
+  if (template.type === "condition_entry_value") {
+    return {
+      message0: "%1 %2",
+      args0: [
+        { type: "field_label_serializable", text: "Entry Value" },
+        { type: "field_input", name: "VALUE", text: "" },
+      ],
+      previousStatement: null,
+      nextStatement: null,
+      colour: template.color,
+      tooltip: "Value helper for entry conditions.",
+      inputsInline: true,
+    };
+  }
+
+  if (template.type === "condition_entry_value_2") {
+    return {
+      message0: "%1 %2",
+      args0: [
+        { type: "field_label_serializable", text: "Entry Value 2" },
+        { type: "field_input", name: "VALUE_2", text: "" },
+      ],
+      previousStatement: null,
+      nextStatement: null,
+      colour: template.color,
+      tooltip: "Second value helper for entry conditions.",
+      inputsInline: true,
+    };
+  }
+
+  if (template.type === "condition_exit_value") {
+    return {
+      message0: "%1 %2",
+      args0: [
+        { type: "field_label_serializable", text: "Exit Value" },
+        { type: "field_input", name: "VALUE", text: "5" },
+      ],
+      previousStatement: null,
+      nextStatement: null,
+      colour: template.color,
+      tooltip: "Value helper for exit conditions.",
+      inputsInline: true,
+    };
+  }
+
+  if (template.type === "condition_exit_value_2") {
+    return {
+      message0: "%1 %2",
+      args0: [
+        { type: "field_label_serializable", text: "Exit Value 2" },
+        { type: "field_input", name: "VALUE_2", text: "" },
+      ],
+      previousStatement: null,
+      nextStatement: null,
+      colour: template.color,
+      tooltip: "Second value helper for exit conditions.",
       inputsInline: true,
     };
   }
@@ -425,7 +480,7 @@ function buildTemplateJson(template: BlockTemplate): any {
       args0: [buildFieldJson(template.fields[0])],
       previousStatement: null,
       nextStatement: null,
-      colour: template.color,
+      colour: getTemplateAccent(template),
       tooltip: template.description,
       inputsInline: true,
     };
@@ -435,7 +490,7 @@ function buildTemplateJson(template: BlockTemplate): any {
     message0: template.title,
     previousStatement: null,
     nextStatement: null,
-    colour: template.color,
+    colour: getTemplateAccent(template),
     tooltip: template.description,
     inputsInline: template.fields.length <= 2,
   };
@@ -494,6 +549,154 @@ function getContractCategoryDisplayFromType(contractType: string): string {
   if (["MATCHES", "DIFFERS"].includes(normalizedType)) return "Matches/Differs";
   if (["OVER", "UNDER"].includes(normalizedType)) return "Over/Under";
   return normalizedType;
+}
+
+const WORKSPACE_SECTION_COLOR = "#334155";
+const WORKSPACE_BLOCK_COLOR = "#2146d0";
+
+function getTemplateAccent(template: BlockTemplate): string {
+  return template.layout === "section" ? WORKSPACE_SECTION_COLOR : WORKSPACE_BLOCK_COLOR;
+}
+
+function isConditionParentType(type: string): boolean {
+  return new Set(["condition_entry", "condition_exit", "condition_purchase", "condition_sell"]).has(type);
+}
+
+function isConditionHelperType(type: string): boolean {
+  return new Set([
+    "condition_entry_value",
+    "condition_entry_value_2",
+    "condition_exit_value",
+    "condition_exit_value_2",
+  ]).has(type);
+}
+
+function getConditionMode(type: string): "entry" | "exit" {
+  return type === "condition_exit" || type === "condition_sell" ? "exit" : "entry";
+}
+
+function getConditionHelperCount(conditionType: string, mode: "entry" | "exit"): number {
+  const normalized = safeString(conditionType).trim().toUpperCase();
+
+  if (mode === "entry") {
+    if (["ALWAYS", "HAS_POSITION", "NO_POSITION"].includes(normalized)) return 0;
+    if (normalized === "PRICE_BETWEEN") return 2;
+    return 1;
+  }
+
+  if (["STOP_LOSS_HIT", "TAKE_PROFIT_HIT"].includes(normalized)) return 0;
+  if (normalized === "PRICE_BETWEEN") return 2;
+  return 1;
+}
+
+function getConditionHelperType(mode: "entry" | "exit", slot: number): string {
+  if (mode === "entry") {
+    return slot === 1 ? "condition_entry_value_2" : "condition_entry_value";
+  }
+  return slot === 1 ? "condition_exit_value_2" : "condition_exit_value";
+}
+
+function getConditionHelperTypes(conditionType: string, mode: "entry" | "exit"): string[] {
+  const count = getConditionHelperCount(conditionType, mode);
+  return Array.from({ length: count }, (_, index) => getConditionHelperType(mode, index));
+}
+
+function getConditionHelperLabel(conditionType: string, mode: "entry" | "exit", slot: number): string {
+  const normalized = safeString(conditionType).trim().toUpperCase();
+  const prefix = mode === "entry" ? "Entry" : "Exit";
+
+  switch (normalized) {
+    case "PRICE_BETWEEN":
+      return slot === 1 ? `${prefix} Price High` : `${prefix} Price Low`;
+    case "PRICE_GT":
+    case "PRICE_LT":
+      return `${prefix} Price`;
+    case "CURRENT_TICK":
+      return `${prefix} Tick Price`;
+    case "TICK_COUNT":
+      return `${prefix} Tick Count`;
+    case "LOSS_THRESHOLD":
+      return `${prefix} Loss Threshold`;
+    case "PROFIT_THRESHOLD":
+      return `${prefix} Profit Threshold`;
+    case "TIME_OF_DAY":
+      return `${prefix} Time`;
+    case "DURATION_ELAPSED":
+      return `${prefix} Duration`;
+    case "SELL_BY_COUNT_DOWN":
+      return `${prefix} Count Down`;
+    case "SELL_BY_TAKE_PROFIT":
+      return `${prefix} Profit`;
+    default:
+      return `${prefix} Value${slot === 1 ? " 2" : ""}`;
+  }
+}
+
+function updateConditionHelperLabels(helperBlocks: any[], conditionType: string, mode: "entry" | "exit"): void {
+  helperBlocks.forEach((helper, index) => {
+    const label = getConditionHelperLabel(conditionType, mode, index);
+    const labelField = helper?.inputList?.[0]?.fieldRow?.[0];
+    if (labelField && typeof labelField.setValue === "function") {
+      try {
+        labelField.setValue(label);
+      } catch (error) {
+        // Ignore label updates on blocks that have not fully initialized yet.
+      }
+    }
+  });
+}
+
+function buildConditionsSnapshotFromBlocks(blocks: SerializedBlock[]): StrategySnapshot["conditions"] {
+  const conditions: StrategySnapshot["conditions"] = {
+    entry: null,
+    exit: null,
+    management: null,
+    variables: [],
+    notifications: null,
+    stats: [],
+    logic: [],
+    math: [],
+    lists: [],
+  };
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (!isConditionParentType(block.type)) continue;
+
+    const mode = getConditionMode(block.type);
+    const normalizedType = safeString(block.values?.CONDITION ?? (mode === "entry" ? "ALWAYS" : "SELL_BY_COUNT_DOWN"));
+    const helperBlocks: SerializedBlock[] = [];
+    let cursor = index + 1;
+
+    while (cursor < blocks.length && isConditionHelperType(blocks[cursor].type)) {
+      helperBlocks.push(blocks[cursor]);
+      cursor += 1;
+    }
+
+    const fallbackValues = (block.values ?? {}) as Record<string, string | number | boolean>;
+    const helperValue = (helperType: string, fieldName: "VALUE" | "VALUE_2"): string => {
+      const helper = helperBlocks.find((next) => next.type === helperType);
+      if (helper) return safeString(helper.values?.[fieldName] ?? "");
+      return safeString(fallbackValues[fieldName] ?? "");
+    };
+
+    if (mode === "entry") {
+      conditions.entry = {
+        type: normalizedType,
+        value: helperValue("condition_entry_value", "VALUE"),
+        value2: helperValue("condition_entry_value_2", "VALUE_2"),
+      };
+    } else {
+      conditions.exit = {
+        type: normalizedType,
+        value: helperValue("condition_exit_value", "VALUE"),
+      };
+    }
+
+    index = cursor - 1;
+  }
+
+  return conditions;
 }
 
 function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unknown> {
@@ -578,9 +781,6 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
     };
   }
 
-  // Parse condition blocks - with safety checks
-  const entryCondition = firstBlockByType(blocks, "condition_entry") ?? firstBlockByType(blocks, "condition_purchase");
-  const exitCondition = firstBlockByType(blocks, "condition_exit") ?? firstBlockByType(blocks, "condition_sell");
   const martingaleSettings = firstBlockByType(blocks, "martingale_settings");
   const notificationSettings = firstBlockByType(blocks, "notification");
   const logicBlocks = blocks.filter((block) => ["logic_if", "logic_else", "logic_compare", "logic_gate"].includes(block.type));
@@ -599,19 +799,12 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
 
   const statsBlocks = blocks.filter((block) => block.type === "notification_stats" || block.type === "strategy_stats");
 
-  // Build conditions object with safety checks
+  const conditionBlocks = blocks.filter((block) => isConditionParentType(block.type) || isConditionHelperType(block.type));
+  const conditions = buildConditionsSnapshotFromBlocks(conditionBlocks);
+
   result.conditions = {
-    entry: entryCondition ? {
-      type: safeString(entryCondition.values?.CONDITION ?? "ALWAYS"),
-      value: safeString(entryCondition.values?.VALUE ?? ""),
-      value2: safeString(entryCondition.values?.VALUE_2 ?? ""),
-    } : null,
-    
-    exit: exitCondition ? {
-      type: safeString(exitCondition.values?.CONDITION ?? "SELL_BY_COUNT_DOWN"),
-      value: safeString(exitCondition.values?.VALUE ?? ""),
-    } : null,
-    
+    entry: conditions.entry,
+    exit: conditions.exit,
     management: martingaleSettings ? {
       initialStake: asNumber(martingaleSettings.values?.INITIAL_STAKE ?? 10, 10),
       multiplier: asNumber(martingaleSettings.values?.MULTIPLIER ?? 2, 2),
@@ -836,6 +1029,8 @@ class BotBuilderApp {
   private readonly pendingProposalDefaultsSymbols: Set<string> = new Set();
   private lastRenderedSymbolSignature = "";
   private syncingContractMetadata = false;
+  private syncingConditionHelpers = false;
+  private pendingContractSyncTimer: number | null = null;
   private pendingAutoRestartTimer: number | null = null;
   private remainingAutoRestarts = 0;
   private readonly maxAutoRestartRuns = 5;
@@ -900,6 +1095,14 @@ class BotBuilderApp {
             <div class="bb-workbench-header">
               <div>
                 <div class="bb-workbench-kicker">Workspace</div>
+                <h2>Build the trade flow</h2>
+                <p>Market, execution, conditions, and restart blocks all stay in one calm workspace.</p>
+              </div>
+              <div class="bb-workbench-flow">
+                <span class="is-market">Market</span>
+                <span class="is-execution">Execution</span>
+                <span class="is-conditions">Conditions</span>
+                <span class="is-restart">Restart</span>
               </div>
             </div>
             <div class="bb-workspace-shell">
@@ -965,7 +1168,9 @@ class BotBuilderApp {
     const list = this.root.querySelector<HTMLElement>("#bb-category-list");
     if (!list) return;
 
-    list.innerHTML = CATEGORY_DEFINITIONS.map((category) => {
+    list.innerHTML = CATEGORY_DEFINITIONS
+      .filter((category) => category.id !== "indicators")
+      .map((category) => {
       const templates = this.getVisibleTemplates(category.id);
 
       return `
@@ -1053,18 +1258,12 @@ class BotBuilderApp {
     this.workspace.addChangeListener((event: any) => {
       const eventType = safeString(event?.type ?? "");
       const fieldName = safeString(event?.name ?? "");
-      const isRelevantFieldChange =
-        eventType === "field_change" &&
-        ["CONTRACT_TYPE", "CONTRACT_CATEGORY", "SYMBOL"].includes(fieldName);
 
       if (!this.syncingContractMetadata) {
-        if (isRelevantFieldChange) {
-          this.syncMarketDropdowns();
-          this.syncExecutionHelperVisibility();
-        } else {
-          this.syncMarketDropdowns();
-          this.syncExecutionHelperVisibility();
-        }
+        this.scheduleContractMetadataSync();
+      }
+      if (!this.syncingConditionHelpers) {
+        this.syncConditionHelpers();
       }
       this.refreshAllPanels();
     });
@@ -1111,7 +1310,16 @@ class BotBuilderApp {
       const addButton = target?.closest<HTMLElement>("[data-add-template]");
       if (addButton) {
         const templateType = addButton.dataset.addTemplate ?? "";
-        this.insertTemplateFromModal(templateType);
+        let presetValues: Record<string, unknown> = {};
+        const presetRaw = addButton.dataset.presetValues ?? "";
+        if (presetRaw) {
+          try {
+            presetValues = JSON.parse(presetRaw) as Record<string, unknown>;
+          } catch (error) {
+            console.warn("Invalid preset values on modal action:", error);
+          }
+        }
+        this.insertTemplateBlockAt(templateType, presetValues);
         return;
       }
     });
@@ -2376,14 +2584,19 @@ class BotBuilderApp {
     const currentVisible = typeof block.isVisible === "function" ? block.isVisible() : undefined;
     if (currentVisible === visible) return false;
     block.setVisible(visible);
-    if (visible) {
-      const template = BLOCK_TEMPLATES_BY_TYPE.get(block.type);
-      const sectionId = template?.sectionId as SectionId | undefined;
-      if (sectionId) {
-        this.placeSectionBlocks(sectionId);
-      }
-    }
     return true;
+  }
+
+  private scheduleContractMetadataSync(): void {
+    if (!this.workspace) return;
+    if (this.pendingContractSyncTimer) {
+      window.clearTimeout(this.pendingContractSyncTimer);
+    }
+    this.pendingContractSyncTimer = window.setTimeout(() => {
+      this.pendingContractSyncTimer = null;
+      this.syncMarketDropdowns();
+      this.refreshAllPanels();
+    }, 0);
   }
 
   private syncExecutionHelperVisibility(): void {
@@ -2423,6 +2636,7 @@ class BotBuilderApp {
       const isDoubleBarrier = barrierCount === 2 && this.getDoubleBarrierContractTypes().has(contractType);
       const isDigitTarget = this.getDigitTargetContractTypes().has(contractType);
       const isDigitRange = this.getDigitRangeContractTypes().has(contractType);
+      const hasActiveExecutionHelper = isSingleBarrier || isDoubleBarrier || isDigitTarget || isDigitRange;
 
       const legacyBarrierBlock = this.findBlockByType("market_barrier");
       const legacyBarrierLowBlock = this.findBlockByType("market_barrier_low");
@@ -2633,7 +2847,7 @@ class BotBuilderApp {
         });
       }
 
-      if (visibleChanged || legacyBarrierBlock || legacyBarrierLowBlock || legacyBarrierHighBlock || legacyDigitTargetBlock || legacyDigitRangeBlock) {
+      if (hasActiveExecutionHelper || visibleChanged || legacyBarrierBlock || legacyBarrierLowBlock || legacyBarrierHighBlock || legacyDigitTargetBlock || legacyDigitRangeBlock) {
         this.placeSectionBlocks("execution");
         try {
           this.workspace.render();
@@ -2770,9 +2984,8 @@ class BotBuilderApp {
 
     this.contractTypesBySymbol.set(normalized.symbol, normalized.contractTypes);
     this.pendingContractTypeSymbols.delete(normalized.symbol);
-    this.syncExecutionHelperVisibility();
     if (normalized.symbol === this.getSelectedMarketSymbol()) {
-      this.syncMarketDropdowns();
+      this.scheduleContractMetadataSync();
     }
   }
 
@@ -2790,9 +3003,8 @@ class BotBuilderApp {
 
     this.proposalDefaultsBySymbol.set(normalized.symbol, defaultsByType);
     this.pendingProposalDefaultsSymbols.delete(normalized.symbol);
-    this.syncExecutionHelperVisibility();
     if (normalized.symbol === this.getSelectedMarketSymbol()) {
-      this.syncMarketDropdowns();
+      this.scheduleContractMetadataSync();
     }
   }
 
@@ -3044,6 +3256,7 @@ class BotBuilderApp {
     if (!this.workspace || this.syncingContractMetadata) return;
 
     this.syncingContractMetadata = true;
+    let needsExecutionHelperSync = false;
     try {
       const symbol = this.getSelectedMarketSymbol();
       const records = this.contractTypesBySymbol.get(symbol) ?? [];
@@ -3169,9 +3382,12 @@ class BotBuilderApp {
         );
       }
       this.requestProposalDefaultsForSymbol(symbol);
-      this.syncExecutionHelperVisibility();
+      needsExecutionHelperSync = true;
     } finally {
       this.syncingContractMetadata = false;
+      if (needsExecutionHelperSync) {
+        this.syncExecutionHelperVisibility();
+      }
     }
   }
 
@@ -3469,7 +3685,7 @@ class BotBuilderApp {
         ? `
           <div class="bb-modal-guidance">
             <strong>Start with the core blocks.</strong>
-            <span>Add the optional blocks only when you need them.</span>
+            <span>Pick a lane for the kind of condition you want, then fine-tune it on the right.</span>
           </div>
         `
         : "";
@@ -3502,7 +3718,7 @@ class BotBuilderApp {
         data-group="${template.groupId}"
         draggable="true"
         data-action="select-template"
-        style="--template-accent:${template.color};"
+        style="--template-accent:${getTemplateAccent(template)};"
       >
         <span class="bb-template-title">
           <strong>${template.title}</strong>
@@ -3515,24 +3731,123 @@ class BotBuilderApp {
 
   private renderGroup(categoryId: string, groupId: string, title: string, description: string, templates: BlockTemplate[]): string {
     const groupTemplates = templates.filter((template) => template.groupId === groupId);
+
+    if (categoryId === "conditions" && groupId === "exit") {
+      return this.renderExitLanes(title, description, groupTemplates);
+    }
+
     const cards = groupTemplates.map((template) => this.renderTemplateCard(template)).join("");
     const featuredGroups = new Set(["entry", "exit", "management"]);
     const groupTone = categoryId === "conditions" && featuredGroups.has(groupId)
-      ? "bb-group--featured"
+      ? "bb-group--featured bb-group--hero"
       : categoryId === "conditions"
         ? "bb-group--optional"
         : "";
+    const groupCount = groupTemplates.length;
+    const subtitle = categoryId === "conditions" && featuredGroups.has(groupId)
+      ? `${groupCount} core block${groupCount === 1 ? "" : "s"}`
+      : description;
 
     return `
       <section class="bb-group ${groupTone}" data-group-panel="${groupId}">
-        <header class="bb-group-header">
+        <header class="bb-group-header ${categoryId === "conditions" && featuredGroups.has(groupId) ? "bb-group-header--hero" : ""}">
           <div>
             <h4>${title}</h4>
-            <p>${description}</p>
+            <p>${subtitle}</p>
           </div>
+          ${categoryId === "conditions" && featuredGroups.has(groupId) ? `<span>${groupId}</span>` : ""}
         </header>
         <div class="bb-group-grid">
           ${cards || `<div class="bb-group-empty">No blocks in this subgroup.</div>`}
+        </div>
+      </section>
+    `;
+  }
+
+  private renderExitLanes(title: string, description: string, templates: BlockTemplate[]): string {
+    const exitTemplate = templates.find((template) => template.type === "condition_exit") ?? templates[0];
+    if (!exitTemplate) {
+      return `
+        <section class="bb-group bb-group--featured" data-group-panel="exit">
+          <header class="bb-group-header">
+            <div>
+              <h4>${title}</h4>
+              <p>${description}</p>
+            </div>
+          </header>
+          <div class="bb-group-empty">No exit blocks available.</div>
+        </section>
+      `;
+    }
+
+    const lanes = [
+      {
+        title: "Price Exit",
+        tag: "Price-based",
+        preset: { CONDITION: "PRICE_BETWEEN" },
+        description: "Use price levels, ranges, and tick rules.",
+        chips: ["Price Above", "Price Below", "Price Between", "Current Tick"],
+      },
+      {
+        title: "Time Exit",
+        tag: "Time-based",
+        preset: { CONDITION: "TIME_OF_DAY" },
+        description: "Use clock time or duration-based exits.",
+        chips: ["Time of Day", "Duration Elapsed", "Count Down"],
+      },
+      {
+        title: "Risk Exit",
+        tag: "Risk-based",
+        preset: { CONDITION: "STOP_LOSS_HIT" },
+        description: "Use stop loss, take profit, and safety exits.",
+        chips: ["Stop Loss", "Take Profit", "Sell by Take Profit"],
+      },
+    ];
+
+    return `
+      <section class="bb-group bb-group--featured bb-group--lanes" data-group-panel="exit">
+        <header class="bb-group-header bb-group-header--stacked">
+          <div>
+            <h4>${title}</h4>
+            <p>Choose a lane first, then add one of the presets or customize it on the right.</p>
+          </div>
+          <span>${lanes.length} lanes</span>
+        </header>
+        <div class="bb-condition-lanes">
+          ${lanes
+            .map((lane) => `
+              <article class="bb-condition-lane">
+                <div class="bb-condition-lane-head">
+                  <div>
+                    <strong>${lane.title}</strong>
+                    <p>${lane.description}</p>
+                  </div>
+                  <span>${lane.tag}</span>
+                </div>
+                <div class="bb-condition-lane-chips">
+                  ${lane.chips.map((chip) => `<span class="bb-chip">${chip}</span>`).join("")}
+                </div>
+                <div class="bb-condition-lane-actions">
+                  <button
+                    type="button"
+                    class="bb-btn bb-btn-primary bb-btn-sm"
+                    data-add-template="${exitTemplate.type}"
+                    data-preset-values='${escapeHtml(JSON.stringify(lane.preset))}'
+                  >
+                    Add ${lane.title}
+                  </button>
+                  <button
+                    type="button"
+                    class="bb-btn bb-btn-secondary bb-btn-sm"
+                    data-template="${exitTemplate.type}"
+                    data-action="select-template"
+                  >
+                    Customize
+                  </button>
+                </div>
+              </article>
+            `)
+            .join("")}
         </div>
       </section>
     `;
@@ -3814,7 +4129,9 @@ class BotBuilderApp {
       }
     }
 
-    if (typeof clientX === "number" && typeof clientY === "number") {
+    if (template.sectionId) {
+      this.attachBlock(block, template);
+    } else if (typeof clientX === "number" && typeof clientY === "number") {
       this.placeBlockAtWorkspacePoint(block, clientX, clientY);
     } else {
       this.attachBlock(block, template);
@@ -3848,6 +4165,30 @@ class BotBuilderApp {
 
   private collectSectionBlocksByType(sectionId: SectionId): any[] {
     if (!this.workspace) return [];
+
+    if (sectionId === "conditions") {
+      const sectionBlock = this.findBlockByType(getSectionBlockType(sectionId));
+      const stackConnection = sectionBlock?.getInput("STACK")?.connection;
+      if (stackConnection) {
+        const ordered: any[] = [];
+        const seen = new Set<string>();
+        let current = stackConnection.targetBlock?.() ?? null;
+
+        while (current) {
+          const template = BLOCK_TEMPLATES_BY_TYPE.get(current.type);
+          if (template && template.sectionId === sectionId && template.serializeInSnapshot !== false && !seen.has(current.id)) {
+            ordered.push(current);
+            seen.add(current.id);
+          }
+          current = current.nextConnection?.targetBlock?.() ?? null;
+        }
+
+        if (ordered.length > 0) {
+          return ordered;
+        }
+      }
+    }
+
     return this.workspace.getAllBlocks(false).filter((block: any) => {
       const template = BLOCK_TEMPLATES_BY_TYPE.get(block.type);
       return Boolean(template && template.sectionId === sectionId && template.serializeInSnapshot !== false);
@@ -3863,9 +4204,18 @@ class BotBuilderApp {
       ...this.collectSectionBlocksByType(sectionId),
       ...extraBlocks,
     ].filter((block, index, array) => array.findIndex((candidate) => candidate.id === block.id) === index);
+    const blockOrder = new Map(blocks.map((block, index) => [block.id, index] as const));
 
     // Sort blocks - execution_settings first, then others by order
     blocks = blocks.sort((left, right) => {
+      if (sectionId === "conditions") {
+        const leftIndex = blockOrder.get(left.id);
+        const rightIndex = blockOrder.get(right.id);
+        if (leftIndex != null && rightIndex != null && leftIndex !== rightIndex) {
+          return leftIndex - rightIndex;
+        }
+      }
+
       if (sectionId === "execution") {
         const leftRank = this.getExecutionStackRank(left.type);
         const rightRank = this.getExecutionStackRank(right.type);
@@ -3902,12 +4252,21 @@ class BotBuilderApp {
     const anchor = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
     const startX = anchor.x + 248;
     const startY = anchor.y + 60;
+    const blockOrder = new Map(blocks.map((block, index) => [block.id, index] as const));
     
     // Define which blocks should be at the top of the section
     const topBlocks = ["execution_settings", "market_settings"];
     
     // Sort blocks: top blocks first, then by order
     const sortedBlocks = blocks.slice().sort((left, right) => {
+      if (sectionId === "conditions") {
+        const leftIndex = blockOrder.get(left.id);
+        const rightIndex = blockOrder.get(right.id);
+        if (leftIndex != null && rightIndex != null && leftIndex !== rightIndex) {
+          return leftIndex - rightIndex;
+        }
+      }
+
       if (sectionId === "execution") {
         const leftRank = this.getExecutionStackRank(left.type);
         const rightRank = this.getExecutionStackRank(right.type);
@@ -3931,6 +4290,13 @@ class BotBuilderApp {
     sortedBlocks.forEach((block, index) => {
       const x = startX;
       const y = useExactStackSpacing ? cursorY : startY + index * 88;
+
+      if (block?.previousConnection?.isConnected?.()) {
+        block.previousConnection.disconnect();
+      }
+      if (block?.nextConnection?.isConnected?.()) {
+        block.nextConnection.disconnect();
+      }
 
       if (typeof block.moveBy === "function") {
         const current = block.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
@@ -4006,6 +4372,128 @@ class BotBuilderApp {
     ]).has(type);
   }
 
+  private collectConditionBundleHelpers(block: any): any[] {
+    const helpers: any[] = [];
+    let current = block?.nextConnection?.targetBlock?.() ?? null;
+    while (current && isConditionHelperType(current.type)) {
+      helpers.push(current);
+      current = current.nextConnection?.targetBlock?.() ?? null;
+    }
+    return helpers;
+  }
+
+  private findConditionBundleTail(block: any): any | null {
+    let current = block?.nextConnection?.targetBlock?.() ?? null;
+    while (current && isConditionHelperType(current.type)) {
+      current = current.nextConnection?.targetBlock?.() ?? null;
+    }
+    return current ?? null;
+  }
+
+  private syncConditionHelpers(): void {
+    if (!this.workspace || this.syncingConditionHelpers) return;
+
+    const Blockly = getBlockly();
+    this.syncingConditionHelpers = true;
+    Blockly.Events.disable();
+
+    try {
+      const parents = this.collectSectionBlocksByType("conditions").filter((block) => isConditionParentType(block.type));
+      for (const parent of parents) {
+        const mode = getConditionMode(parent.type);
+        const condition = safeString(parent.getFieldValue?.("CONDITION") ?? (mode === "entry" ? "ALWAYS" : "SELL_BY_COUNT_DOWN")).trim().toUpperCase();
+        const desiredHelperTypes = getConditionHelperTypes(condition, mode);
+        const existingHelpers = this.collectConditionBundleHelpers(parent);
+        const existingTypes = existingHelpers.map((helper) => helper.type);
+
+        const sameShape =
+          existingTypes.length === desiredHelperTypes.length &&
+          existingTypes.every((type, index) => type === desiredHelperTypes[index]);
+
+        if (sameShape) {
+          updateConditionHelperLabels(existingHelpers, condition, mode);
+          continue;
+        }
+
+        const fallbackValues = (parent as any).__conditionFallbackValues ?? {};
+        const helperValues = new Map<string, string>();
+        for (const helper of existingHelpers) {
+          helperValues.set(helper.type, String(helper?.getFieldValue?.("VALUE") ?? helper?.getFieldValue?.("VALUE_2") ?? ""));
+        }
+
+        const tail = this.findConditionBundleTail(parent);
+        for (const helper of existingHelpers) {
+          if (typeof helper.dispose === "function") {
+            helper.dispose(true);
+          }
+        }
+
+        if (parent?.nextConnection?.isConnected?.()) {
+          parent.nextConnection.disconnect();
+        }
+
+        if (desiredHelperTypes.length === 0) {
+          if (tail?.previousConnection) {
+            if (tail.previousConnection.isConnected()) {
+              tail.previousConnection.disconnect();
+            }
+            if (parent?.nextConnection) {
+              parent.nextConnection.connect(tail.previousConnection);
+            }
+          }
+          continue;
+        }
+
+        const createdHelpers: any[] = [];
+        for (let index = 0; index < desiredHelperTypes.length; index += 1) {
+          const helperType = desiredHelperTypes[index];
+          const helper = this.safeCreateBlock(helperType);
+          if (!helper) continue;
+          createdHelpers.push(helper);
+
+          const fieldName = helperType.endsWith("_2") ? "VALUE_2" : "VALUE";
+          const sourceValue =
+            helperValues.get(helperType) ??
+            safeString(fallbackValues[fieldName] ?? "") ??
+            (helperType === "condition_exit_value" ? "5" : "");
+          if (sourceValue) {
+            helper.setFieldValue(sourceValue, fieldName);
+          } else if (fieldName === "VALUE" && helperType === "condition_exit_value") {
+            helper.setFieldValue("5", fieldName);
+          }
+        }
+
+        updateConditionHelperLabels(createdHelpers, condition, mode);
+
+        for (let index = 0; index < createdHelpers.length; index += 1) {
+          const helper = createdHelpers[index];
+          const nextHelper = createdHelpers[index + 1];
+
+          if (index === 0 && parent?.nextConnection && helper?.previousConnection) {
+            parent.nextConnection.connect(helper.previousConnection);
+          }
+
+          if (!helper?.nextConnection) continue;
+
+          if (index === createdHelpers.length - 1) {
+            if (tail?.previousConnection) {
+              helper.nextConnection.connect(tail.previousConnection);
+            }
+          } else if (nextHelper?.previousConnection) {
+            helper.nextConnection.connect(nextHelper.previousConnection);
+          }
+        }
+      }
+
+      const refreshed = this.collectSectionBlocksByType("conditions");
+      this.placeSectionBlocks("conditions", refreshed);
+      this.connectSectionBlocks("conditions", refreshed);
+    } finally {
+      Blockly.Events.enable();
+      this.syncingConditionHelpers = false;
+    }
+  }
+
   private placeExecutionHelperBlocks(sectionBlock: any, blocks: any[]): void {
     if (!sectionBlock || blocks.length === 0) return;
 
@@ -4026,6 +4514,12 @@ class BotBuilderApp {
     const topOfHelpers = startY + 290;
     orderedBlocks.forEach((block, index) => {
       if (typeof block.moveBy !== "function") return;
+      if (block?.previousConnection?.isConnected?.()) {
+        block.previousConnection.disconnect();
+      }
+      if (block?.nextConnection?.isConnected?.()) {
+        block.nextConnection.disconnect();
+      }
       const current = block.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
       block.moveBy(startX - current.x, topOfHelpers + index * 78 - current.y);
     });
@@ -4035,9 +4529,18 @@ class BotBuilderApp {
     const sectionBlock = this.findBlockByType(getSectionBlockType(sectionId));
     const stackConnection = sectionBlock?.getInput("STACK")?.connection;
     if (!sectionBlock || !stackConnection || blocks.length === 0) return;
+    const blockOrder = new Map(blocks.map((block, index) => [block.id, index] as const));
 
     // Sort blocks to ensure correct order - execution_settings first
     const orderedBlocks = blocks.slice().sort((left, right) => {
+      if (sectionId === "conditions") {
+        const leftIndex = blockOrder.get(left.id);
+        const rightIndex = blockOrder.get(right.id);
+        if (leftIndex != null && rightIndex != null && leftIndex !== rightIndex) {
+          return leftIndex - rightIndex;
+        }
+      }
+
       if (sectionId === "execution") {
         const leftRank = this.getExecutionStackRank(left.type);
         const rightRank = this.getExecutionStackRank(right.type);
@@ -4078,6 +4581,10 @@ class BotBuilderApp {
       stackConnection.connect(firstBlock.previousConnection);
     }
 
+    if (sectionId === "execution" && helperBlocks.length > 0) {
+      this.placeExecutionHelperBlocks(sectionBlock, helperBlocks);
+    }
+
     // Chain the remaining blocks
     for (let index = 0; index < coreBlocks.length - 1; index += 1) {
       const current = coreBlocks[index];
@@ -4096,8 +4603,32 @@ class BotBuilderApp {
       }
     }
 
-    if (sectionId === "execution" && helperBlocks.length > 0) {
-      this.placeExecutionHelperBlocks(sectionBlock, helperBlocks);
+    if (sectionId === "execution" && helperBlocks.length > 0 && coreBlocks.length > 0) {
+      const lastCore = coreBlocks[coreBlocks.length - 1];
+      const firstHelper = helperBlocks[0];
+      if (lastCore?.nextConnection && firstHelper?.previousConnection) {
+        if (lastCore.nextConnection.isConnected()) {
+          lastCore.nextConnection.disconnect();
+        }
+        if (firstHelper.previousConnection.isConnected()) {
+          firstHelper.previousConnection.disconnect();
+        }
+        lastCore.nextConnection.connect(firstHelper.previousConnection);
+      }
+
+      for (let index = 0; index < helperBlocks.length - 1; index += 1) {
+        const current = helperBlocks[index];
+        const next = helperBlocks[index + 1];
+        if (current?.nextConnection && next?.previousConnection) {
+          if (current.nextConnection.isConnected()) {
+            current.nextConnection.disconnect();
+          }
+          if (next.previousConnection.isConnected()) {
+            next.previousConnection.disconnect();
+          }
+          current.nextConnection.connect(next.previousConnection);
+        }
+      }
     }
   }
 
@@ -4162,10 +4693,14 @@ class BotBuilderApp {
       for (const section of [
         { id: "market", height: 200 },
         { id: "execution", height: 400 },
-        { id: "conditions", height: 300 },
+        { id: "conditions", height: 200 },
         { id: "indicators", height: 180 },
         { id: "restart", height: 140 },
       ] as Array<{ id: SectionId; height: number }>) {
+        if (section.id === "indicators") {
+          sections.push({ id: section.id, blocks: [], height: section.height });
+          continue;
+        }
         const sectionBlock = this.workspace.newBlock(getSectionBlockType(section.id));
         sectionBlock.initSvg();
         sectionBlock.render();
@@ -4206,8 +4741,6 @@ class BotBuilderApp {
         const entryConditionBlock = this.safeCreateBlock("condition_entry");
         if (entryConditionBlock) {
           entryConditionBlock.setFieldValue("ALWAYS", "CONDITION");
-          entryConditionBlock.setFieldValue("", "VALUE");
-          entryConditionBlock.setFieldValue("", "VALUE_2");
           conditionsBlocks.push(entryConditionBlock);
         }
 
@@ -4215,20 +4748,12 @@ class BotBuilderApp {
         const exitConditionBlock = this.safeCreateBlock("condition_exit");
         if (exitConditionBlock) {
           exitConditionBlock.setFieldValue("SELL_BY_COUNT_DOWN", "CONDITION");
-          exitConditionBlock.setFieldValue("5", "VALUE");
           conditionsBlocks.push(exitConditionBlock);
         }
 
         sections[2].blocks = conditionsBlocks;
 
-        // ===== 4. INDICATORS BLOCKS =====
-        const indicatorsSettingsBlock = this.safeCreateBlock("indicators_settings");
-        if (indicatorsSettingsBlock) {
-          this.updateDropdownFieldOptions(indicatorsSettingsBlock, "SYMBOL", [], liveSymbol, liveSymbol);
-          sections[3].blocks = [indicatorsSettingsBlock];
-        }
-
-        // ===== 5. RESTART BLOCKS =====
+        // ===== 4. RESTART BLOCKS =====
         const restartSettingsBlock = this.safeCreateBlock("restart_settings");
         if (restartSettingsBlock) {
           sections[4].blocks = [restartSettingsBlock];
@@ -4251,6 +4776,7 @@ class BotBuilderApp {
       }
 
       this.syncExecutionHelperVisibility();
+      this.syncConditionHelpers();
       this.normalizeAllSections();
       
       // Sync symbol dropdowns after seeding
@@ -4261,8 +4787,6 @@ class BotBuilderApp {
     } finally {
       Blockly.Events.enable();
     }
-
-    this.workspace.scrollCenter();
   }
 
   /**
@@ -4341,6 +4865,9 @@ class BotBuilderApp {
     for (const section of SECTION_DEFINITIONS) {
       this.normalizeSection(section.id as SectionId);
     }
+  }
+
+  private normalizeConditionBlocks(): void {
   }
 
   private normalizeSection(sectionId: SectionId): void {
@@ -4624,6 +5151,9 @@ class BotBuilderApp {
         const importedBlocks = (section.blocks ?? [])
           .map((block, index) => ({ block, index }))
           .sort((left, right) => {
+            if (sectionId === "conditions") {
+              return left.index - right.index;
+            }
             const leftTemplate = BLOCK_TEMPLATES_BY_TYPE.get(left.block.type);
             const rightTemplate = BLOCK_TEMPLATES_BY_TYPE.get(right.block.type);
             return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.index - right.index;
@@ -4635,6 +5165,7 @@ class BotBuilderApp {
       }
 
       this.syncExecutionHelperVisibility();
+      this.syncConditionHelpers();
       this.normalizeAllSections();
       this.refreshAllPanels();
     } finally {
@@ -4660,6 +5191,13 @@ class BotBuilderApp {
       } else {
         newBlock.setFieldValue(String(value), field.name);
       }
+    }
+
+    if (block.type === "condition_entry" || block.type === "condition_exit" || block.type === "condition_purchase" || block.type === "condition_sell") {
+      (newBlock as any).__conditionFallbackValues = {
+        VALUE: safeString(block.values?.VALUE ?? ""),
+        VALUE_2: safeString(block.values?.VALUE_2 ?? ""),
+      };
     }
 
     return newBlock;
@@ -4724,6 +5262,8 @@ class BotBuilderApp {
     this.workspace.clear();
     Blockly.Xml.domToWorkspace(xmlDom, this.workspace);
     this.syncExecutionHelperVisibility();
+    this.syncConditionHelpers();
+    this.normalizeAllSections();
     this.refreshAllPanels();
   }
 

@@ -42,6 +42,11 @@ export type BlockTemplate = {
   outputType?: "Number" | "String" | "Boolean" | "List"; 
 };
 
+export const WORKSPACE_SECTION_COLOR = "#334155";
+export const WORKSPACE_BLOCK_COLOR = "#2146d0";
+export const CONDITION_PARENT_COLOR = WORKSPACE_BLOCK_COLOR;
+export const CONDITION_HELPER_COLOR = WORKSPACE_BLOCK_COLOR;
+
 export type SectionDefinition = {
   id: string;
   title: string;
@@ -349,14 +354,17 @@ export const RESTART_CONDITION_OPTIONS: FieldOption[] = [
   { label: "Never", value: "NEVER" },
 ];
 
-export const CONDITION_COLOR = "#6b7280"; // Grey
-export const VARIABLE_COLOR = "#6b7280";
-export const LOGIC_COLOR = "#6b7280"; 
-export const MATH_COLOR = "#6b7280";
-export const LIST_COLOR = "#6b7280";
-export const TEXT_COLOR = "#6b7280";
-export const TIME_COLOR = "#6b7280";
-export const NOTIFICATION_COLOR = "#6b7280";
+export const MARKET_COLOR = WORKSPACE_BLOCK_COLOR;
+export const EXECUTION_COLOR = WORKSPACE_BLOCK_COLOR;
+export const CONDITION_COLOR = WORKSPACE_BLOCK_COLOR;
+export const RESTART_COLOR = WORKSPACE_BLOCK_COLOR;
+export const VARIABLE_COLOR = WORKSPACE_BLOCK_COLOR;
+export const LOGIC_COLOR = WORKSPACE_BLOCK_COLOR; 
+export const MATH_COLOR = WORKSPACE_BLOCK_COLOR;
+export const LIST_COLOR = WORKSPACE_BLOCK_COLOR;
+export const TEXT_COLOR = WORKSPACE_BLOCK_COLOR;
+export const TIME_COLOR = WORKSPACE_BLOCK_COLOR;
+export const NOTIFICATION_COLOR = WORKSPACE_BLOCK_COLOR;
 
 export const BLOCK_TEMPLATES: BlockTemplate[] = [
   {
@@ -366,7 +374,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "market",
     groupId: "sections",
     order: 0,
-    color: "#2146d0",
+    color: WORKSPACE_SECTION_COLOR,
     layout: "section",
     sectionId: "market",
     hiddenInPalette: true,
@@ -376,11 +384,11 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   {
     type: "execution_section",
     title: "Execution",
-    description: "The execution scaffold for stake and duration blocks.",
+    description: "The execution scaffold for stake, duration, and trade control blocks.",
     categoryId: "execution",
     groupId: "sections",
     order: 0,
-    color: "#179b6d",
+    color: WORKSPACE_SECTION_COLOR,
     layout: "section",
     sectionId: "execution",
     hiddenInPalette: true,
@@ -390,11 +398,11 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   {
     type: "indicators_section",
     title: "Indicators",
-    description: "The indicators scaffold for technical filters.",
+    description: "The indicators scaffold for technical filters and confirmation blocks.",
     categoryId: "indicators",
     groupId: "sections",
     order: 0,
-    color: "#64748b",
+    color: WORKSPACE_SECTION_COLOR,
     layout: "section",
     sectionId: "indicators",
     hiddenInPalette: true,
@@ -404,11 +412,11 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   {
     type: "conditions_section",
     title: "Conditions",
-    description: "The conditions scaffold for purchase and sell rules.",
+    description: "The conditions scaffold for entry, exit, and management rules.",
     categoryId: "conditions",
     groupId: "sections",
     order: 0,
-    color: "#64748b",
+    color: WORKSPACE_SECTION_COLOR,
     layout: "section",
     sectionId: "conditions",
     hiddenInPalette: true,
@@ -422,7 +430,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "restart",
     groupId: "sections",
     order: 0,
-    color: "#64748b",
+    color: WORKSPACE_SECTION_COLOR,
     layout: "section",
     sectionId: "restart",
     hiddenInPalette: true,
@@ -436,7 +444,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "market",
     groupId: "trade_setup",
     order: 10,
-    color: "#2146d0",
+    color: MARKET_COLOR,
     layout: "statement",
     sectionId: "market",
     hiddenInPalette: true,
@@ -457,7 +465,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "market",
     groupId: "trade_setup",
     order: 20,
-    color: "#2146d0",
+    color: MARKET_COLOR,
     layout: "statement",
     sectionId: "market",
     fields: [
@@ -477,7 +485,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "market",
     groupId: "trade_setup",
     order: 30,
-    color: "#2146d0",
+    color: MARKET_COLOR,
     layout: "statement",
     sectionId: "market",
     fields: [
@@ -497,7 +505,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "market",
     groupId: "trade_setup",
     order: 40,
-    color: "#2146d0",
+    color: MARKET_COLOR,
     layout: "statement",
     sectionId: "market",
     fields: [
@@ -517,7 +525,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "market",
     groupId: "trade_setup",
     order: 10,
-    color: "#2146d0",
+    color: MARKET_COLOR,
     layout: "statement",
     sectionId: "market",
     hiddenInPalette: true,
@@ -559,7 +567,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "barriers",
     order: 20,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     hiddenInPalette: true,
@@ -582,7 +590,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "barriers",
     order: 21,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     hiddenInPalette: true,
@@ -605,7 +613,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "barriers",
     order: 22,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     hiddenInPalette: true,
@@ -628,7 +636,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "digits",
     order: 30,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     hiddenInPalette: true,
@@ -667,7 +675,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "digits",
     order: 40,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     hiddenInPalette: true,
@@ -699,7 +707,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "trade_controls",
     order: 10,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     fields: [
@@ -721,7 +729,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "trade_controls",
     order: 20,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     fields: [
@@ -743,7 +751,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "trade_controls",
     order: 15,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     fields: [
@@ -783,7 +791,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "trade_controls",
     order: 10,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     hiddenInPalette: true,
@@ -823,7 +831,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "risk",
     order: 20,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     fields: [
@@ -869,7 +877,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "execution",
     groupId: "timing",
     order: 30,
-    color: "#179b6d",
+    color: EXECUTION_COLOR,
     layout: "statement",
     sectionId: "execution",
     fields: [
@@ -899,9 +907,10 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   categoryId: "indicators",
   groupId: "sources",
   order: 10,
-  color: "#6b7280",
+  color: CONDITION_COLOR,
   layout: "statement",
   sectionId: "indicators",
+  hiddenInPalette: true,
   fields: [
     {
       kind: "dropdown",
@@ -921,9 +930,10 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   categoryId: "indicators",
   groupId: "sources",
   order: 11,
-  color: "#6b7280",
+  color: CONDITION_COLOR,
   layout: "statement",
   sectionId: "indicators",
+  hiddenInPalette: true,
   fields: [
     {
       kind: "number",
@@ -945,7 +955,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   categoryId: "indicators",
   groupId: "sources",
   order: 12,
-  color: "#6b7280",
+  color: CONDITION_COLOR,
   layout: "statement",
   sectionId: "indicators",
   hiddenInPalette: true,
@@ -977,9 +987,10 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   categoryId: "indicators",
   groupId: "comparisons",
   order: 20,
-  color: "#6b7280",
+  color: CONDITION_COLOR,
   layout: "statement",
   sectionId: "indicators",
+  hiddenInPalette: true,
   fields: [
     {
       kind: "dropdown",
@@ -1024,7 +1035,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   categoryId: "indicators",
   groupId: "sources",
   order: 5,
-  color: "#6b7280",
+  color: CONDITION_COLOR,
   layout: "statement",
   sectionId: "indicators",
   hiddenInPalette: true,
@@ -1751,7 +1762,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "conditions",
     groupId: "entry",
     order: 80,
-    color: CONDITION_COLOR,
+    color: CONDITION_PARENT_COLOR,
     layout: "statement",
     sectionId: "conditions",
     fields: [
@@ -1775,20 +1786,6 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
           { label: "Duration Elapsed", value: "DURATION_ELAPSED" },
         ],
       },
-      {
-        kind: "text",
-        name: "VALUE",
-        label: "Value",
-        defaultValue: "",
-        placeholder: "e.g., 100",
-      },
-      {
-        kind: "text",
-        name: "VALUE_2",
-        label: "Value 2",
-        defaultValue: "",
-        placeholder: "e.g., 200 (for between)",
-      },
     ],
   },
   
@@ -1799,7 +1796,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "conditions",
     groupId: "exit",
     order: 81,
-    color: CONDITION_COLOR,
+    color: CONDITION_PARENT_COLOR,
     layout: "statement",
     sectionId: "conditions",
     fields: [
@@ -1822,12 +1819,93 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
           { label: "Duration Elapsed", value: "DURATION_ELAPSED" },
         ],
       },
+    ],
+  },
+  {
+    type: "condition_entry_value",
+    title: "Entry Value",
+    description: "Value helper for entry conditions.",
+    categoryId: "conditions",
+    groupId: "entry",
+    order: 82,
+    color: CONDITION_HELPER_COLOR,
+    layout: "statement",
+    sectionId: "conditions",
+    hiddenInPalette: true,
+    serializeInSnapshot: true,
+    fields: [
+      {
+        kind: "text",
+        name: "VALUE",
+        label: "Value",
+        defaultValue: "",
+        placeholder: "e.g., 100",
+      },
+    ],
+  },
+  {
+    type: "condition_entry_value_2",
+    title: "Entry Value 2",
+    description: "Second value helper for entry conditions.",
+    categoryId: "conditions",
+    groupId: "entry",
+    order: 83,
+    color: CONDITION_HELPER_COLOR,
+    layout: "statement",
+    sectionId: "conditions",
+    hiddenInPalette: true,
+    serializeInSnapshot: true,
+    fields: [
+      {
+        kind: "text",
+        name: "VALUE_2",
+        label: "Value 2",
+        defaultValue: "",
+        placeholder: "e.g., 200 (for between)",
+      },
+    ],
+  },
+  {
+    type: "condition_exit_value",
+    title: "Exit Value",
+    description: "Value helper for exit conditions.",
+    categoryId: "conditions",
+    groupId: "exit",
+    order: 84,
+    color: CONDITION_HELPER_COLOR,
+    layout: "statement",
+    sectionId: "conditions",
+    hiddenInPalette: true,
+    serializeInSnapshot: true,
+    fields: [
       {
         kind: "text",
         name: "VALUE",
         label: "Value",
         defaultValue: "5",
         placeholder: "e.g., 5",
+      },
+    ],
+  },
+  {
+    type: "condition_exit_value_2",
+    title: "Exit Value 2",
+    description: "Second value helper for exit conditions.",
+    categoryId: "conditions",
+    groupId: "exit",
+    order: 85,
+    color: CONDITION_HELPER_COLOR,
+    layout: "statement",
+    sectionId: "conditions",
+    hiddenInPalette: true,
+    serializeInSnapshot: true,
+    fields: [
+      {
+        kind: "text",
+        name: "VALUE_2",
+        label: "Value 2",
+        defaultValue: "",
+        placeholder: "e.g., 200 (for between)",
       },
     ],
   },
@@ -1935,7 +2013,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "restart",
     groupId: "recovery",
     order: 10,
-    color: "#6b7280",
+    color: RESTART_COLOR,
     layout: "statement",
     sectionId: "restart",
     fields: [
@@ -1957,7 +2035,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
     categoryId: "restart",
     groupId: "recovery",
     order: 5,
-    color: "#6b7280",
+    color: RESTART_COLOR,
     layout: "statement",
     sectionId: "restart",
     hiddenInPalette: true,

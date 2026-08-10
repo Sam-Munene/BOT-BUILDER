@@ -59,7 +59,7 @@ export const PanelsUI = {
       market: null, 
       execution: null, 
       indicators: [],
-      conditions: { entry: null, exit: null, management: null, variables: [], notifications: null, stats: [] },
+      conditions: { entry: null, exit: null, exits: [], management: null, variables: [], notifications: null, stats: [] },
       restart: { onWin: null, onLoss: null }
     };
     
@@ -110,6 +110,16 @@ export const PanelsUI = {
           type: legacySellMatch[1] || 'SELL_BY_COUNT_DOWN',
           value: legacySellMatch[2] || ''
         };
+      }
+
+      const exitBlockMatches = [...code.matchAll(/__BOT_BUILDER_EXIT_CONDITIONS\.push\(\{\s*type:\s*"([^"]*)"[^}]*value:\s*"([^"]*)"[^}]*group:\s*"([^"]*)"/g)];
+      if (exitBlockMatches.length) {
+        strategy.conditions.exits = exitBlockMatches.map((match) => ({
+          type: match[1] || 'SELL_BY_COUNT_DOWN',
+          value: match[2] || '',
+          group: match[3] || 'price'
+        }));
+        strategy.conditions.exit = strategy.conditions.exit || strategy.conditions.exits[0] || null;
       }
 
       const managementMatch = code.match(/MARTINGALE_SETTINGS\s*=\s*\{[^}]*initialStake:\s*([\d.]+)[^}]*multiplier:\s*([\d.]+)[^}]*maxStake:\s*([\d.]+)[^}]*profitThreshold:\s*([\d.]+)[^}]*lossThreshold:\s*([\d.]+)[^}]*tradeAgain:\s*(true|false)/i);

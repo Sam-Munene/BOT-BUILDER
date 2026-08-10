@@ -93,6 +93,7 @@ export interface ExecutionSettings {
 export interface Conditions {
   entry?: Condition | null;
   exit?: Condition | null;
+  exits?: Condition[];
   management?: TradeManagement | null;
   variables?: StrategyVariable[];
   notifications?: NotificationSettings | null;
@@ -108,6 +109,7 @@ export interface Condition {
   type: string;
   value: string;
   value2?: string;
+  group?: string;
 }
 
 export interface TradeManagement {
