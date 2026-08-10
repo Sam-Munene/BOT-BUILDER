@@ -301,6 +301,9 @@ export class ValidationService {
       if (management.lossThreshold < 0) {
         errors.push('Management loss threshold cannot be negative');
       }
+      if (management.repeatRuns !== undefined && management.repeatRuns !== null && management.repeatRuns < 1) {
+        errors.push('Management repeat runs must be at least 1');
+      }
     }
 
     return errors;

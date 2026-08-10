@@ -453,8 +453,10 @@ function buildTemplateJson(template: BlockTemplate): any {
       args4: [{ type: "field_number", name: "PROFIT_THRESHOLD", value: 100, min: 0, max: 10000, precision: 0.5 }],
       message5: "Loss Threshold %1",
       args5: [{ type: "field_number", name: "LOSS_THRESHOLD", value: 50, min: 0, max: 10000, precision: 0.5 }],
-      message6: "Trade Again After Win %1",
-      args6: [{ type: "field_checkbox", name: "TRADE_AGAIN", checked: true }],
+      message6: "Repeat Runs %1",
+      args6: [{ type: "field_number", name: "REPEAT_RUNS", value: 5, min: 1, max: 100, precision: 1 }],
+      message7: "Trade Again After Win %1",
+      args7: [{ type: "field_checkbox", name: "TRADE_AGAIN", checked: true }],
       previousStatement: null,
       nextStatement: null,
       colour: template.color,
@@ -769,7 +771,7 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
     };
 
     result.execution = {
-      stake: asNumber(values.STAKE ?? 10, 10),
+      stake: asNumber(values.STAKE ?? 0.5, 0.5),
       duration: asNumber(values.DURATION ?? 5, 5),
       durationUnit: safeString(values.DURATION_UNIT ?? "t"),
       stopLoss: asNumber(values.STOP_LOSS ?? 5, 5),
@@ -811,6 +813,7 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
       maxStake: asNumber(martingaleSettings.values?.MAX_STAKE ?? 50, 50),
       profitThreshold: asNumber(martingaleSettings.values?.PROFIT_THRESHOLD ?? 100, 100),
       lossThreshold: asNumber(martingaleSettings.values?.LOSS_THRESHOLD ?? 50, 50),
+      repeatRuns: asNumber(martingaleSettings.values?.REPEAT_RUNS ?? 5, 5),
       tradeAgain: asBoolean(martingaleSettings.values?.TRADE_AGAIN ?? true),
     } : null,
     
@@ -976,6 +979,35 @@ function createApiPayload(strategy: StrategySnapshot): Record<string, unknown> |
 }
 
 function collectSectionBlocks(workspace: any, sectionId: SectionId): SerializedBlock[] {
+  if (sectionId === "conditions") {
+    const sectionBlock = workspace
+      .getAllBlocks(false)
+      .find((block: any) => block.type === getSectionBlockType(sectionId)) ?? null;
+    const stackConnection = sectionBlock?.getInput("STACK")?.connection;
+    if (stackConnection) {
+      const ordered: SerializedBlock[] = [];
+      const seen = new Set<string>();
+      let current = stackConnection.targetBlock?.() ?? null;
+
+      while (current) {
+        const template = BLOCK_TEMPLATES_BY_TYPE.get(current.type);
+        if (template && template.sectionId === sectionId && template.serializeInSnapshot !== false && !seen.has(current.id)) {
+          ordered.push({
+            type: current.type,
+            title: template.title,
+            values: cloneFields(readTemplateValues(current, template)),
+          });
+          seen.add(current.id);
+        }
+        current = current.nextConnection?.targetBlock?.() ?? null;
+      }
+
+      if (ordered.length > 0) {
+        return ordered;
+      }
+    }
+  }
+
   return workspace
     .getAllBlocks(false)
     .filter((block: any) => {
@@ -1019,6 +1051,8 @@ class BotBuilderApp {
   private currentTradeOutcome: TradeOutcome | null = null;
   private currentTradeContractId: string | null = null;
   private activeTradeSnapshot: StrategySnapshot | null = null;
+  private currentRepeatRun = 0;
+  private totalRepeatRuns = 1;
   private sessionStateLabel: "Disconnected" | "Connecting" | "Connected" | "Authenticated" | "Session refreshed" = "Disconnected";
   private sessionStateNote = "Click Connect to start.";
   private readonly wsEventLog: WsEventLogEntry[] = [];
@@ -1033,7 +1067,7 @@ class BotBuilderApp {
   private pendingContractSyncTimer: number | null = null;
   private pendingAutoRestartTimer: number | null = null;
   private remainingAutoRestarts = 0;
-  private readonly maxAutoRestartRuns = 5;
+  private readonly defaultRepeatRuns = 5;
 
   constructor(target: string | HTMLElement = "#app") {
     this.root = resolveTarget(target);
@@ -2847,7 +2881,15 @@ class BotBuilderApp {
         });
       }
 
-      if (hasActiveExecutionHelper || visibleChanged || legacyBarrierBlock || legacyBarrierLowBlock || legacyBarrierHighBlock || legacyDigitTargetBlock || legacyDigitRangeBlock) {
+      const shouldReflowExecutionSection =
+        visibleChanged ||
+        legacyBarrierBlock ||
+        legacyBarrierLowBlock ||
+        legacyBarrierHighBlock ||
+        legacyDigitTargetBlock ||
+        legacyDigitRangeBlock;
+
+      if (shouldReflowExecutionSection) {
         this.placeSectionBlocks("execution");
         try {
           this.workspace.render();
@@ -2929,7 +2971,7 @@ class BotBuilderApp {
         : [],
       default_duration: this.toFiniteNumber(record.default_duration) ?? 5,
       default_duration_unit: safeString(record.default_duration_unit ?? "t") || "t",
-      default_stake: this.toFiniteNumber(record.default_stake) ?? 10,
+      default_stake: this.toFiniteNumber(record.default_stake) ?? 0.5,
       duration_limits: durationLimits,
       min_stake: this.toFiniteNumber(record.min_stake) ?? 0.5,
       max_stake: this.toFiniteNumber(record.max_stake) ?? 5000,
@@ -3558,12 +3600,18 @@ class BotBuilderApp {
     }
   }
 
-  private startTradeSession(preserveAutoRestartState = false): void {
+  private startTradeSession(repeatRuns = this.defaultRepeatRuns, preserveAutoRestartState = false): void {
     this.clearPendingTradeWaits();
     this.clearPendingAutoRestart();
     if (!preserveAutoRestartState) {
-      this.remainingAutoRestarts = this.maxAutoRestartRuns - 1;
+      this.totalRepeatRuns = Math.max(1, Math.floor(repeatRuns));
+      this.currentRepeatRun = 1;
+      this.remainingAutoRestarts = Math.max(0, Math.floor(repeatRuns) - 1);
     }
+  }
+
+  private getRepeatProgressLabel(): string {
+    return `Run ${Math.min(this.currentRepeatRun, this.totalRepeatRuns)} of ${this.totalRepeatRuns}`;
   }
 
   private shouldAutoRestart(outcome: TradeOutcome): boolean {
@@ -3588,6 +3636,7 @@ class BotBuilderApp {
     if (!snapshot) return;
 
     this.remainingAutoRestarts -= 1;
+    this.currentRepeatRun = Math.min(this.currentRepeatRun + 1, this.totalRepeatRuns);
     this.clearPendingAutoRestart();
     this.pendingAutoRestartTimer = window.setTimeout(() => {
       this.pendingAutoRestartTimer = null;
@@ -3603,7 +3652,7 @@ class BotBuilderApp {
     const orderParams = {
       symbol,
       contract_type: String(payload.contract_type ?? "UP"),
-      stake: Number(payload.stake ?? 10),
+      stake: Number(payload.stake ?? 0.5),
       duration: Number(payload.duration ?? 5),
       duration_unit: String(payload.duration_unit ?? "t"),
       barrier: payload.barrier as number | undefined,
@@ -5010,6 +5059,30 @@ class BotBuilderApp {
       return;
     }
 
+    const activeLifecycle = this.currentLifecycle && this.currentTradeOutcome === null;
+    if (activeLifecycle && !preserveAutoRestartState) {
+      const message = "A trade is already running. Wait for it to settle before starting another run.";
+      if (statusPill) {
+        statusPill.className = "bb-status-pill is-error";
+        statusPill.textContent = "Busy";
+      }
+      if (statusCaption) {
+        statusCaption.textContent = message;
+      }
+      if (resultsEl) {
+        resultsEl.innerHTML = `<div class="bb-result-error">${message}</div>`;
+      }
+      return;
+    }
+
+    const management = snapshot.conditions?.management as Record<string, unknown> | null | undefined;
+    const repeatRunsRaw = management?.repeatRuns;
+    const repeatRunsValue =
+      typeof repeatRunsRaw === "number" || typeof repeatRunsRaw === "string" || typeof repeatRunsRaw === "boolean"
+        ? repeatRunsRaw
+        : this.defaultRepeatRuns;
+    const repeatRuns = management ? Math.max(1, Math.floor(asNumber(repeatRunsValue, this.defaultRepeatRuns))) : 1;
+
     if (statusPill) {
       statusPill.className = "bb-status-pill is-ready";
       statusPill.textContent = "Running";
@@ -5028,7 +5101,7 @@ class BotBuilderApp {
       `;
     }
 
-    this.startTradeSession(preserveAutoRestartState);
+    this.startTradeSession(repeatRuns, preserveAutoRestartState);
     this.activeTradeSnapshot = snapshot;
     this.resetTradeRuntimeState(true);
     this.appendWsEventLog("run", {
@@ -5042,7 +5115,8 @@ class BotBuilderApp {
       const orderData = await this.runLiveTrade(payload);
       this.currentTradeContractId = this.toTradeId(orderData.contract_id ?? orderData.contractId) ?? null;
       const lifecycle = this.buildTradeLifecycle(payload, orderData);
-      this.setCurrentLifecycle(lifecycle, "Demo trade request sent", "Waiting for websocket order, activation, and settlement events.");
+      const progressLabel = this.getRepeatProgressLabel();
+      this.setCurrentLifecycle(lifecycle, `${progressLabel} - Demo trade request sent`, "Waiting for websocket order, activation, and settlement events.");
       const contractId = this.currentTradeContractId ?? "pending";
       const payout = orderData.payout ?? orderData.profit ?? "n/a";
       const sessionType = orderData.session_type ?? "demo";
@@ -5052,7 +5126,7 @@ class BotBuilderApp {
         statusPill.textContent = "Trade running";
       }
       if (statusCaption) {
-        statusCaption.textContent = "Order request sent. Waiting for activation and settlement from the feed.";
+        statusCaption.textContent = `${progressLabel}. Order request sent. Waiting for activation and settlement from the feed.`;
       }
       this.updateFeedStatus(`Trade request sent on ${String(sessionType)} account #${contractId}. Payout ${String(payout)}.`);
     } catch (error) {

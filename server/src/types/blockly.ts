@@ -118,6 +118,7 @@ export interface TradeManagement {
   maxStake: number;
   profitThreshold: number;
   lossThreshold: number;
+  repeatRuns?: number;
   tradeAgain: boolean;
 }
 
