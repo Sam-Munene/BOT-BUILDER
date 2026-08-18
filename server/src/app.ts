@@ -198,6 +198,16 @@ function getBlockly(): any {
   return Blockly;
 }
 
+function createSmallerBlocklyTheme(Blockly: any): any {
+  return {
+    name: "botBuilderSmallerText",
+    ...(Blockly?.Themes?.Classic ? { base: Blockly.Themes.Classic } : {}),
+    fontStyle: {
+      size: 10,
+    },
+  };
+}
+
 function safeString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -1282,11 +1292,11 @@ class BotBuilderApp {
 
     this.workspace = Blockly.inject(workspaceHost, {
       toolbox: null,
-      trashcan: false,
+      trashcan: true,
       zoom: {
         controls: true,
         wheel: true,
-        startScale: 1.08,
+        startScale: 0.88,
         maxScale: 1.8,
         minScale: 0.5,
         scaleSpeed: 1.1,
@@ -1302,7 +1312,7 @@ class BotBuilderApp {
         colour: "rgba(150, 165, 190, 0.25)",
       },
       renderer: "zelos",
-      theme: undefined,
+      theme: createSmallerBlocklyTheme(Blockly),
     });
 
     workspaceHost.addEventListener("dragover", (event) => {

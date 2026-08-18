@@ -438,7 +438,7 @@ button {
   position: relative;
   min-height: 0;
   height: 100%;
-  min-height: clamp(720px, 79svh, 980px);
+  min-height: clamp(560px, 66svh, 860px);
   padding: 12px;
   border: 1px solid var(--bb-border-soft);
   border-radius: 28px;
@@ -1570,7 +1570,7 @@ button {
   }
 
   .bb-workspace-shell {
-    min-height: 70vh;
+    min-height: 62vh;
   }
 
   .bb-modal-shell {
