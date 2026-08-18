@@ -199,6 +199,36 @@ export function registerConditionGenerators(Blockly: BlocklyInterface): void {
     return [`(globalThis.__BOT_BUILDER_LISTS?.find((item) => item.name === ${name})?.values ?? []).length`, Blockly.JavaScript.ORDER_ATOMIC];
   };
 
+  Blockly.JavaScript['text_operation'] = function(block: BlocklyBlock): string {
+    const operator = asJsString(block.getFieldValue('OPERATOR') || 'CONCAT');
+    const text1 = asJsString(block.getFieldValue('TEXT_1') || '');
+    const text2 = asJsString(block.getFieldValue('TEXT_2') || '');
+    return `globalThis.__BOT_BUILDER_TEXT = globalThis.__BOT_BUILDER_TEXT || [];\nglobalThis.__BOT_BUILDER_TEXT.push({ op: ${operator}, text1: ${text1}, text2: ${text2} });\n`;
+  };
+
+  Blockly.JavaScript['text_contains'] = function(block: BlocklyBlock): [string, number] {
+    const text = asJsString(block.getFieldValue('TEXT') || '');
+    const substring = asJsString(block.getFieldValue('SUBSTRING') || '');
+    return [`${text}.includes(${substring})`, Blockly.JavaScript.ORDER_RELATIONAL];
+  };
+
+  Blockly.JavaScript['time_delay'] = function(block: BlocklyBlock): string {
+    const duration = asJsNumber(block.getFieldValue('DURATION') || 5, 5);
+    const unit = asJsString(block.getFieldValue('UNIT') || 'SECONDS');
+    return `globalThis.__BOT_BUILDER_TIME = globalThis.__BOT_BUILDER_TIME || [];\nglobalThis.__BOT_BUILDER_TIME.push({ op: "DELAY", duration: ${duration}, unit: ${unit} });\n`;
+  };
+
+  Blockly.JavaScript['time_at'] = function(block: BlocklyBlock): string {
+    const time = asJsString(block.getFieldValue('TIME') || '09:00');
+    return `globalThis.__BOT_BUILDER_TIME = globalThis.__BOT_BUILDER_TIME || [];\nglobalThis.__BOT_BUILDER_TIME.push({ op: "AT_TIME", time: ${time} });\n`;
+  };
+
+  Blockly.JavaScript['time_count_down'] = function(block: BlocklyBlock): string {
+    const start = asJsNumber(block.getFieldValue('START') || 10, 10);
+    const current = asJsNumber(block.getFieldValue('CURRENT') ?? 10, Number(start));
+    return `globalThis.__BOT_BUILDER_TIME = globalThis.__BOT_BUILDER_TIME || [];\nglobalThis.__BOT_BUILDER_TIME.push({ op: "COUNT_DOWN", start: ${start}, current: ${current} });\n`;
+  };
+
   // Backwards-compatible aliases for older palette/code paths.
   Blockly.JavaScript['condition_purchase'] = Blockly.JavaScript['condition_entry'];
   Blockly.JavaScript['condition_sell'] = Blockly.JavaScript['condition_exit'];

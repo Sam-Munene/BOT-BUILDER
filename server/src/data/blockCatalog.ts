@@ -271,8 +271,6 @@ export const CONDITION_OPTIONS: FieldOption[] = [
   // Trade Management
   { label: "Stop Loss Hit", value: "STOP_LOSS_HIT" },
   { label: "Take Profit Hit", value: "TAKE_PROFIT_HIT" },
-  { label: "Sell by Count Down", value: "SELL_BY_COUNT_DOWN" },
-  { label: "Sell by Take Profit", value: "SELL_BY_TAKE_PROFIT" },
   
   // Time Conditions
   { label: "Time of Day", value: "TIME_OF_DAY" },
@@ -1804,10 +1802,8 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
         kind: "dropdown",
         name: "CONDITION",
         label: "When",
-        defaultValue: "SELL_BY_COUNT_DOWN",
+        defaultValue: "PRICE_GT",
         options: [
-          { label: "Sell by Count Down", value: "SELL_BY_COUNT_DOWN" },
-          { label: "Sell by Take Profit", value: "SELL_BY_TAKE_PROFIT" },
           { label: "Price Above", value: "PRICE_GT" },
           { label: "Price Below", value: "PRICE_LT" },
           { label: "Price Between", value: "PRICE_BETWEEN" },

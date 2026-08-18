@@ -8,27 +8,27 @@ export function registerRestartBlocks(Blockly: BlocklyInterface): void {
 
   Blockly.Blocks['restart_on_win'] = {
     init: function(this: BlocklyBlock): void {
-      this.jsonInit({
-        type: 'restart_on_win',
-        message0: '🏆 Restart on Win',
-        message1: 'Reset stake to $%1',
-        args1: [{ type: 'field_number', name: 'STAKE', value: 10, min: 0.5, max: 50000, precision: 0.5 }],
-        colour: '#831843',
-        tooltip: 'Configure restart after a win',
-      });
+      const block = this as any;
+      block.setColour('#831843');
+      block.setTooltip('Configure restart after a win');
+      block.setInputsInline(true);
+      block.appendDummyInput('HEADER')
+        .appendField('🏆 Restart on Win')
+        .appendField('Reset stake to $')
+        .appendField(new (Blockly as any).FieldNumber(10, 0.5, 50000, 0.5), 'STAKE');
     }
   };
 
   Blockly.Blocks['restart_on_loss'] = {
     init: function(this: BlocklyBlock): void {
-      this.jsonInit({
-        type: 'restart_on_loss',
-        message0: '💔 Restart on Loss',
-        message1: 'Reset stake to $%1',
-        args1: [{ type: 'field_number', name: 'STAKE', value: 10, min: 0.5, max: 50000, precision: 0.5 }],
-        colour: '#831843',
-        tooltip: 'Configure restart after a loss',
-      });
+      const block = this as any;
+      block.setColour('#831843');
+      block.setTooltip('Configure restart after a loss');
+      block.setInputsInline(true);
+      block.appendDummyInput('HEADER')
+        .appendField('💔 Restart on Loss')
+        .appendField('Reset stake to $')
+        .appendField(new (Blockly as any).FieldNumber(10, 0.5, 50000, 0.5), 'STAKE');
     }
   };
 }

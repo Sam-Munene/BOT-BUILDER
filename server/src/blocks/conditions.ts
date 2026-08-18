@@ -266,10 +266,8 @@ export function registerConditionBlocks(Blockly: BlocklyInterface): void {
       block.setInputsInline(true);
 
       block.appendDummyInput('HEADER')
-        .appendField('📈 Entry Condition');
-
-      block.appendDummyInput('CONDITION_ROW')
         .appendField('When')
+        .appendField('📈 Entry Condition')
         .appendField(getConditionField(Blockly, [
           ['Always', 'ALWAYS'],
           ['Price Above', 'PRICE_GT'],
@@ -297,13 +295,9 @@ export function registerConditionBlocks(Blockly: BlocklyInterface): void {
       block.setInputsInline(true);
 
       block.appendDummyInput('HEADER')
-        .appendField('📉 Exit Condition');
-
-      block.appendDummyInput('CONDITION_ROW')
         .appendField('When')
+        .appendField('📉 Exit Condition')
         .appendField(getConditionField(Blockly, [
-          ['Sell by Count Down', 'SELL_BY_COUNT_DOWN'],
-          ['Sell by Take Profit', 'SELL_BY_TAKE_PROFIT'],
           ['Price Above', 'PRICE_GT'],
           ['Price Below', 'PRICE_LT'],
           ['Price Between', 'PRICE_BETWEEN'],
@@ -313,7 +307,7 @@ export function registerConditionBlocks(Blockly: BlocklyInterface): void {
           ['Take Profit Hit', 'TAKE_PROFIT_HIT'],
           ['Time of Day', 'TIME_OF_DAY'],
           ['Duration Elapsed', 'DURATION_ELAPSED'],
-        ], 'SELL_BY_COUNT_DOWN'), 'CONDITION');
+        ], 'PRICE_GT'), 'CONDITION');
 
       wireDynamicConditionBlock(Blockly, block, 'CONDITION', getExitShape);
     },

@@ -1,6 +1,7 @@
 import { storageService } from "./services/storage";
 import { validationService } from "./services/validation";
 import { wsService } from "./services/websocket";
+import { ConditionRuntimeEngine, type ConditionEngineReport } from "./services/conditionEngine";
 import {
   BLOCK_TEMPLATES,
   BLOCK_TEMPLATES_BY_TYPE,
@@ -39,6 +40,8 @@ type StrategySnapshot = {
     exit: Record<string, unknown> | null;
     management: Record<string, unknown> | null;  // Martingale settings
     variables: Array<Record<string, unknown>>;   // All variable blocks
+    text: Array<Record<string, unknown>>;
+    time: Array<Record<string, unknown>>;
     notifications: Record<string, unknown> | null;
     stats: Array<Record<string, unknown>>;
     logic: Array<Record<string, unknown>>;
@@ -139,6 +142,16 @@ const SECTION_BLOCK_TYPES: Record<SectionId, string> = {
   conditions: "conditions_section",
   restart: "restart_section",
 };
+
+const WORKSPACE_SECTION_LEFT = 72;
+const WORKSPACE_SECTION_TOP = 34;
+const WORKSPACE_SECTION_GAP = 6;
+const WORKSPACE_SECTION_STACK_STEP = 200;
+const WORKSPACE_SECTION_CONTENT_X = 248;
+const WORKSPACE_SECTION_CONTENT_Y = 48;
+const WORKSPACE_SECTION_BLOCK_GAP = 4;
+const WORKSPACE_EXECUTION_HELPER_OFFSET_Y = 188;
+const WORKSPACE_EXECUTION_HELPER_GAP = 50;
 
 const DEFAULT_SYMBOL = "VIX_100";
 const DEFAULT_CATEGORY = "market";
@@ -328,8 +341,6 @@ function buildTemplateJson(template: BlockTemplate): any {
           type: "field_dropdown",
           name: "CONDITION",
           options: [
-            ["Sell by Count Down", "SELL_BY_COUNT_DOWN"],
-            ["Sell by Take Profit", "SELL_BY_TAKE_PROFIT"],
             ["Price Above", "PRICE_GT"],
             ["Price Below", "PRICE_LT"],
             ["Price Between", "PRICE_BETWEEN"],
@@ -654,6 +665,8 @@ function buildConditionsSnapshotFromBlocks(blocks: SerializedBlock[]): StrategyS
     exit: null,
     management: null,
     variables: [],
+    text: [],
+    time: [],
     notifications: null,
     stats: [],
     logic: [],
@@ -666,7 +679,7 @@ function buildConditionsSnapshotFromBlocks(blocks: SerializedBlock[]): StrategyS
     if (!isConditionParentType(block.type)) continue;
 
     const mode = getConditionMode(block.type);
-    const normalizedType = safeString(block.values?.CONDITION ?? (mode === "entry" ? "ALWAYS" : "SELL_BY_COUNT_DOWN"));
+    const normalizedType = safeString(block.values?.CONDITION ?? (mode === "entry" ? "ALWAYS" : "PRICE_GT"));
     const helperBlocks: SerializedBlock[] = [];
     let cursor = index + 1;
 
@@ -788,6 +801,8 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
   const logicBlocks = blocks.filter((block) => ["logic_if", "logic_else", "logic_compare", "logic_gate"].includes(block.type));
   const mathBlocks = blocks.filter((block) => ["math_operation", "math_current_tick", "math_tick_count"].includes(block.type));
   const listBlocks = blocks.filter((block) => ["list_create", "list_operation", "list_contains", "list_length"].includes(block.type));
+  const textBlocks = blocks.filter((block) => ["text_operation", "text_contains"].includes(block.type));
+  const timeBlocks = blocks.filter((block) => ["time_delay", "time_at", "time_count_down"].includes(block.type));
 
   // Collect all variable blocks
   const variableBlocks = blocks.filter(
@@ -858,6 +873,14 @@ function convertBlocksToSnapshot(blocks: SerializedBlock[]): Record<string, unkn
       values: block.values,
     })),
     lists: listBlocks.map((block) => ({
+      type: block.type,
+      values: block.values,
+    })),
+    text: textBlocks.map((block) => ({
+      type: block.type,
+      values: block.values,
+    })),
+    time: timeBlocks.map((block) => ({
       type: block.type,
       values: block.values,
     })),
@@ -1053,6 +1076,11 @@ class BotBuilderApp {
   private activeTradeSnapshot: StrategySnapshot | null = null;
   private currentRepeatRun = 0;
   private totalRepeatRuns = 1;
+  private currentRunStake = 0;
+  private sessionStakeBudget = 0;
+  private sessionLossThreshold = Number.POSITIVE_INFINITY;
+  private sessionLossSpent = 0;
+  private sessionProfitSpent = 0;
   private sessionStateLabel: "Disconnected" | "Connecting" | "Connected" | "Authenticated" | "Session refreshed" = "Disconnected";
   private sessionStateNote = "Click Connect to start.";
   private readonly wsEventLog: WsEventLogEntry[] = [];
@@ -1068,6 +1096,9 @@ class BotBuilderApp {
   private pendingAutoRestartTimer: number | null = null;
   private remainingAutoRestarts = 0;
   private readonly defaultRepeatRuns = 5;
+  private readonly conditionEngine = new ConditionRuntimeEngine();
+  private lastConditionReport: ConditionEngineReport | null = null;
+  private pendingConditionLaunchSnapshot: StrategySnapshot | null = null;
 
   constructor(target: string | HTMLElement = "#app") {
     this.root = resolveTarget(target);
@@ -1148,6 +1179,11 @@ class BotBuilderApp {
               <div class="bb-card-title">Status</div>
               <div class="bb-status-pill is-error" id="bb-status-pill">Not ready</div>
               <div class="bb-status-caption" id="bb-status-caption">No validation issues yet.</div>
+            </section>
+
+            <section class="bb-card">
+              <div class="bb-card-title">Condition Engine</div>
+              <div id="bb-condition-engine" class="bb-condition-engine">No engine activity yet.</div>
             </section>
 
             <section class="bb-card">
@@ -1495,13 +1531,43 @@ class BotBuilderApp {
       this.handleProposalDefaultsPayload(payload);
     };
     const handleTick = (tick: Record<string, unknown>) => {
-      if (this.currentTradeOutcome !== null || !this.currentLifecycle) return;
+      if (this.currentTradeOutcome !== null) return;
+      if (!this.currentLifecycle && !this.pendingConditionLaunchSnapshot) return;
       this.latestTick = tick;
       this.appendWsEventLog("tick", tick);
+      this.lastConditionReport = this.conditionEngine.ingestTick(tick, {
+        nowMs: Date.now(),
+        currentTradeActive: this.currentTradeOutcome === null && (Boolean(this.currentLifecycle) || Boolean(this.pendingConditionLaunchSnapshot)),
+        currentTradeOutcome: this.currentTradeOutcome,
+        currentRepeatRun: this.currentRepeatRun || 1,
+        totalRepeatRuns: this.totalRepeatRuns || 1,
+        currentRunStake: this.currentRunStake,
+        sessionStakeBudget: this.sessionStakeBudget,
+        sessionLossSpent: this.sessionLossSpent,
+        sessionLossThreshold: this.sessionLossThreshold,
+        sessionProfitSpent: this.sessionProfitSpent,
+      });
+      if (this.pendingConditionLaunchSnapshot && this.lastConditionReport.entrySatisfied && !this.currentLifecycle) {
+        const snapshot = this.pendingConditionLaunchSnapshot;
+        this.pendingConditionLaunchSnapshot = null;
+        void this.runStrategy({ preserveAutoRestartState: false, snapshot });
+      }
     };
     const handleOrder = (message: Record<string, unknown>) => {
       if (!this.currentLifecycle) return;
       this.appendWsEventLog("order", message);
+      this.lastConditionReport = this.conditionEngine.ingestLifecycleEvent("order", message, {
+        nowMs: Date.now(),
+        currentTradeActive: true,
+        currentTradeOutcome: this.currentTradeOutcome,
+        currentRepeatRun: this.currentRepeatRun || 1,
+        totalRepeatRuns: this.totalRepeatRuns || 1,
+        currentRunStake: this.currentRunStake,
+        sessionStakeBudget: this.sessionStakeBudget,
+        sessionLossSpent: this.sessionLossSpent,
+        sessionLossThreshold: this.sessionLossThreshold,
+        sessionProfitSpent: this.sessionProfitSpent,
+      });
       this.applyLifecycleEvent("order", message);
     };
     const handleContractCreated = (message: Record<string, unknown>) => {
@@ -1512,11 +1578,35 @@ class BotBuilderApp {
     const handleContractActivated = (message: Record<string, unknown>) => {
       if (!this.currentLifecycle) return;
       this.appendWsEventLog("contract_activated", message);
+      this.lastConditionReport = this.conditionEngine.ingestLifecycleEvent("activated", message, {
+        nowMs: Date.now(),
+        currentTradeActive: true,
+        currentTradeOutcome: this.currentTradeOutcome,
+        currentRepeatRun: this.currentRepeatRun || 1,
+        totalRepeatRuns: this.totalRepeatRuns || 1,
+        currentRunStake: this.currentRunStake,
+        sessionStakeBudget: this.sessionStakeBudget,
+        sessionLossSpent: this.sessionLossSpent,
+        sessionLossThreshold: this.sessionLossThreshold,
+        sessionProfitSpent: this.sessionProfitSpent,
+      });
       this.applyLifecycleEvent("activated", message);
     };
     const handleContractSettled = (message: Record<string, unknown>) => {
       if (!this.currentLifecycle) return;
       this.appendWsEventLog("contract_settled", message);
+      this.lastConditionReport = this.conditionEngine.ingestLifecycleEvent("expiry", message, {
+        nowMs: Date.now(),
+        currentTradeActive: false,
+        currentTradeOutcome: this.currentTradeOutcome,
+        currentRepeatRun: this.currentRepeatRun || 1,
+        totalRepeatRuns: this.totalRepeatRuns || 1,
+        currentRunStake: this.currentRunStake,
+        sessionStakeBudget: this.sessionStakeBudget,
+        sessionLossSpent: this.sessionLossSpent,
+        sessionLossThreshold: this.sessionLossThreshold,
+        sessionProfitSpent: this.sessionProfitSpent,
+      });
       this.applyLifecycleEvent("expiry", message);
     };
     const handleContractDetail = (message: Record<string, unknown>) => {
@@ -1880,6 +1970,7 @@ class BotBuilderApp {
     if (this.currentLifecycle) {
       this.renderTradeLifecycle(this.currentLifecycle, this.currentLifecycleHeading || "Live trade", this.currentLifecycleSubheading || "Live websocket activity");
     }
+    this.renderConditionEnginePanel(this.lastSnapshot, null);
   }
 
   private extractErrorMessage(error: unknown, fallback: string): string {
@@ -2219,6 +2310,14 @@ class BotBuilderApp {
     if (!outcome) return;
     if (this.currentTradeOutcome !== null) return;
 
+    const tradeDelta = this.getTradeProfitDelta(record, this.currentRunStake || this.sessionStakeBudget);
+    if (tradeDelta != null && tradeDelta < 0) {
+      this.sessionLossSpent += Math.abs(tradeDelta);
+    } else if (tradeDelta != null && tradeDelta > 0) {
+      this.sessionProfitSpent += tradeDelta;
+    }
+    this.conditionEngine.applyTradeOutcome(outcome, tradeDelta);
+
     this.currentTradeOutcome = outcome;
     if (contractId !== null) {
       this.currentTradeContractId = contractId;
@@ -2242,7 +2341,9 @@ class BotBuilderApp {
       this.renderTradeLifecycle(this.currentLifecycle, label, subheading);
     }
     this.stopActiveTradeFeed();
-    this.updateFeedStatus(`${label}${this.currentTradeContractId !== null ? ` for contract ${this.currentTradeContractId}` : ""}.`);
+    const lossRemaining = this.getSessionLossRemaining();
+    const lossNote = Number.isFinite(lossRemaining) ? ` Loss remaining: ${lossRemaining.toFixed(2)}.` : "";
+    this.updateFeedStatus(`${label}${this.currentTradeContractId !== null ? ` for contract ${this.currentTradeContractId}` : ""}.${lossNote}`);
     this.queueAutoRestart(outcome);
   }
 
@@ -2890,7 +2991,6 @@ class BotBuilderApp {
         legacyDigitRangeBlock;
 
       if (shouldReflowExecutionSection) {
-        this.placeSectionBlocks("execution");
         try {
           this.workspace.render();
           this.workspace.resize();
@@ -3447,6 +3547,21 @@ class BotBuilderApp {
     this.currentTradeOutcome = null;
     this.currentTradeContractId = null;
     this.latestTick = null;
+    this.sessionProfitSpent = 0;
+    this.lastConditionReport = null;
+    this.pendingConditionLaunchSnapshot = null;
+    this.conditionEngine.reset(null, {
+      nowMs: Date.now(),
+      currentTradeActive: false,
+      currentTradeOutcome: null,
+      currentRepeatRun: this.currentRepeatRun || 1,
+      totalRepeatRuns: this.totalRepeatRuns || 1,
+      currentRunStake: this.currentRunStake,
+      sessionStakeBudget: this.sessionStakeBudget,
+      sessionLossSpent: this.sessionLossSpent,
+      sessionLossThreshold: this.sessionLossThreshold,
+      sessionProfitSpent: this.sessionProfitSpent,
+    });
     if (clearEventLog) {
       this.wsEventLog.length = 0;
     }
@@ -3600,18 +3715,73 @@ class BotBuilderApp {
     }
   }
 
-  private startTradeSession(repeatRuns = this.defaultRepeatRuns, preserveAutoRestartState = false): void {
+  private startTradeSession(
+    repeatRuns = this.defaultRepeatRuns,
+    sessionStakeBudget = 0,
+    lossThreshold = Number.POSITIVE_INFINITY,
+    preserveAutoRestartState = false,
+  ): void {
     this.clearPendingTradeWaits();
     this.clearPendingAutoRestart();
     if (!preserveAutoRestartState) {
       this.totalRepeatRuns = Math.max(1, Math.floor(repeatRuns));
       this.currentRepeatRun = 1;
+      this.currentRunStake = this.totalRepeatRuns > 0 ? Math.max(0, sessionStakeBudget / this.totalRepeatRuns) : sessionStakeBudget;
+      this.sessionStakeBudget = sessionStakeBudget;
+      this.sessionLossThreshold = Number.isFinite(lossThreshold) && lossThreshold > 0 ? lossThreshold : Number.POSITIVE_INFINITY;
+      this.sessionLossSpent = 0;
+      this.sessionProfitSpent = 0;
       this.remainingAutoRestarts = Math.max(0, Math.floor(repeatRuns) - 1);
     }
+    this.conditionEngine.setSessionProgress(
+      this.currentRepeatRun || 1,
+      this.totalRepeatRuns || Math.max(1, Math.floor(repeatRuns)),
+      this.currentRunStake,
+      this.sessionStakeBudget,
+      this.sessionLossSpent,
+      this.sessionLossThreshold,
+    );
   }
 
   private getRepeatProgressLabel(): string {
     return `Run ${Math.min(this.currentRepeatRun, this.totalRepeatRuns)} of ${this.totalRepeatRuns}`;
+  }
+
+  private buildSessionTradePayload(snapshot: StrategySnapshot, repeatRuns: number): Record<string, unknown> | null {
+    const basePayload = snapshot.apiPayload ?? this.createOrderPayload(snapshot);
+    if (!basePayload) return null;
+
+    const totalStake = this.toFiniteNumber(basePayload.stake ?? snapshot.execution?.stake ?? 0) ?? 0;
+    const safeRuns = Math.max(1, Math.floor(repeatRuns));
+    const perRunStake = safeRuns > 0 ? totalStake / safeRuns : totalStake;
+
+    return {
+      ...basePayload,
+      stake: perRunStake,
+    };
+  }
+
+  private getTradeProfitDelta(record: Record<string, unknown>, fallbackStake: number): number | null {
+    const profit = this.toFiniteNumber(record.profit);
+    if (profit != null) return profit;
+
+    const payout = this.toFiniteNumber(record.payout);
+    const stake = this.toFiniteNumber(record.stake);
+    if (payout != null && stake != null) {
+      return payout - stake;
+    }
+
+    const outcome = this.resolveOutcomeFromRecord(record);
+    if (outcome === "lost") return -Math.abs(fallbackStake);
+    if (outcome === "won") return 0;
+    return null;
+  }
+
+  private getSessionLossRemaining(): number {
+    if (!Number.isFinite(this.sessionLossThreshold)) {
+      return Number.POSITIVE_INFINITY;
+    }
+    return Math.max(0, this.sessionLossThreshold - this.sessionLossSpent);
   }
 
   private shouldAutoRestart(outcome: TradeOutcome): boolean {
@@ -3622,6 +3792,7 @@ class BotBuilderApp {
     const tradeAgain = management ? Boolean(management.tradeAgain ?? true) : true;
     if (!tradeAgain) return false;
     if (this.remainingAutoRestarts <= 0) return false;
+    if (this.getSessionLossRemaining() <= 0) return false;
 
     if (restartType === "AFTER_WIN_OR_LOSS") return outcome === "won" || outcome === "lost";
     if (restartType === "AFTER_WIN") return outcome === "won";
@@ -4299,8 +4470,9 @@ class BotBuilderApp {
     if (blocks.length === 0) return;
 
     const anchor = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
-    const startX = anchor.x + 248;
-    const startY = anchor.y + 60;
+    const startX = anchor.x + WORKSPACE_SECTION_CONTENT_X;
+    const startY = anchor.y + this.getSectionContentOffsetY(sectionId);
+    const blockGap = this.getSectionBlockGap(sectionId);
     const blockOrder = new Map(blocks.map((block, index) => [block.id, index] as const));
     
     // Define which blocks should be at the top of the section
@@ -4333,12 +4505,10 @@ class BotBuilderApp {
       return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
     });
 
-    const useExactStackSpacing = sectionId === "execution";
     let cursorY = startY;
 
-    sortedBlocks.forEach((block, index) => {
+    sortedBlocks.forEach((block) => {
       const x = startX;
-      const y = useExactStackSpacing ? cursorY : startY + index * 88;
 
       if (block?.previousConnection?.isConnected?.()) {
         block.previousConnection.disconnect();
@@ -4349,14 +4519,12 @@ class BotBuilderApp {
 
       if (typeof block.moveBy === "function") {
         const current = block.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
-        block.moveBy(x - current.x, y - current.y);
+        block.moveBy(x - current.x, cursorY - current.y);
       }
 
-      if (useExactStackSpacing) {
-        const size = typeof block.getHeightWidth === "function" ? block.getHeightWidth() : null;
-        const height = Number(size?.height) > 0 ? Number(size.height) : 88;
-        cursorY += height + 10;
-      }
+      const size = typeof block.getHeightWidth === "function" ? block.getHeightWidth() : null;
+      const height = Number(size?.height) > 0 ? Number(size.height) : 88;
+      cursorY += height + blockGap;
     });
   }
 
@@ -4384,6 +4552,18 @@ class BotBuilderApp {
       return Boolean(block.isVisible());
     }
     return true;
+  }
+
+  private getSectionContentOffsetY(sectionId: SectionId): number {
+    if (sectionId === "conditions") return 40;
+    if (sectionId === "restart") return 44;
+    return WORKSPACE_SECTION_CONTENT_Y;
+  }
+
+  private getSectionBlockGap(sectionId: SectionId): number {
+    if (sectionId === "conditions") return 2;
+    if (sectionId === "restart") return 3;
+    return WORKSPACE_SECTION_BLOCK_GAP;
   }
 
   private getExecutionStackRank(type: string): number {
@@ -4534,9 +4714,6 @@ class BotBuilderApp {
         }
       }
 
-      const refreshed = this.collectSectionBlocksByType("conditions");
-      this.placeSectionBlocks("conditions", refreshed);
-      this.connectSectionBlocks("conditions", refreshed);
     } finally {
       Blockly.Events.enable();
       this.syncingConditionHelpers = false;
@@ -4547,7 +4724,7 @@ class BotBuilderApp {
     if (!sectionBlock || blocks.length === 0) return;
 
     const anchor = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
-    const startX = anchor.x + 248;
+    const startX = anchor.x + WORKSPACE_SECTION_CONTENT_X;
     const startY = anchor.y + 60;
 
     const orderedBlocks = blocks.slice().sort((left, right) => {
@@ -4560,7 +4737,7 @@ class BotBuilderApp {
       return (leftTemplate?.order ?? 0) - (rightTemplate?.order ?? 0) || left.type.localeCompare(right.type);
     });
 
-    const topOfHelpers = startY + 290;
+    const topOfHelpers = startY + WORKSPACE_EXECUTION_HELPER_OFFSET_Y;
     orderedBlocks.forEach((block, index) => {
       if (typeof block.moveBy !== "function") return;
       if (block?.previousConnection?.isConnected?.()) {
@@ -4570,7 +4747,7 @@ class BotBuilderApp {
         block.nextConnection.disconnect();
       }
       const current = block.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
-      block.moveBy(startX - current.x, topOfHelpers + index * 78 - current.y);
+      block.moveBy(startX - current.x, topOfHelpers + index * WORKSPACE_EXECUTION_HELPER_GAP - current.y);
     });
   }
 
@@ -4735,25 +4912,15 @@ class BotBuilderApp {
     try {
       // First, ensure all blocks are registered
       this.registerBlocks();
+      const sections: Array<{ id: SectionId; blocks: any[] }> = [];
 
-      const sections: Array<{ id: SectionId; blocks: any[]; height: number }> = [];
-
-      // Section heights - updated order: Market → Execution → Conditions → Indicators → Restart
-      for (const section of [
-        { id: "market", height: 200 },
-        { id: "execution", height: 400 },
-        { id: "conditions", height: 200 },
-        { id: "indicators", height: 180 },
-        { id: "restart", height: 140 },
-      ] as Array<{ id: SectionId; height: number }>) {
-        if (section.id === "indicators") {
-          sections.push({ id: section.id, blocks: [], height: section.height });
-          continue;
+      for (const sectionId of ["market", "execution", "conditions", "indicators", "restart"] as SectionId[]) {
+        if (sectionId !== "indicators") {
+          const sectionBlock = this.workspace.newBlock(getSectionBlockType(sectionId));
+          sectionBlock.initSvg();
+          sectionBlock.render();
         }
-        const sectionBlock = this.workspace.newBlock(getSectionBlockType(section.id));
-        sectionBlock.initSvg();
-        sectionBlock.render();
-        sections.push({ id: section.id, blocks: [], height: section.height });
+        sections.push({ id: sectionId, blocks: [] });
       }
 
       if (includeStarterBlocks) {
@@ -4796,7 +4963,7 @@ class BotBuilderApp {
         // 3b. Exit Condition
         const exitConditionBlock = this.safeCreateBlock("condition_exit");
         if (exitConditionBlock) {
-          exitConditionBlock.setFieldValue("SELL_BY_COUNT_DOWN", "CONDITION");
+          exitConditionBlock.setFieldValue("PRICE_GT", "CONDITION");
           conditionsBlocks.push(exitConditionBlock);
         }
 
@@ -4809,24 +4976,18 @@ class BotBuilderApp {
         }
       }
 
-      // Position sections vertically in the new order
-      let yCursor = 40;
-      for (const section of sections) {
-        const sectionBlock = this.findBlockByType(getSectionBlockType(section.id));
-        if (sectionBlock) {
-          const current = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
-          sectionBlock.moveBy(72 - current.x, yCursor - current.y);
+      if (includeStarterBlocks) {
+        for (const section of sections) {
+          if (section.blocks.length > 0) {
+            this.placeSectionBlocks(section.id, section.blocks);
+            this.connectSectionBlocks(section.id, section.blocks);
+          }
         }
-        if (includeStarterBlocks && section.blocks.length > 0) {
-          this.placeSectionBlocks(section.id, section.blocks);
-          this.connectSectionBlocks(section.id, section.blocks);
-        }
-        yCursor += section.height;
       }
 
+      this.normalizeAllSections();
       this.syncExecutionHelperVisibility();
       this.syncConditionHelpers();
-      this.normalizeAllSections();
       
       // Sync symbol dropdowns after seeding
       this.syncSymbolDropdowns();
@@ -4867,6 +5028,38 @@ class BotBuilderApp {
     }
   }
 
+  private getSectionBottom(sectionId: SectionId): number {
+    const sectionBlock = this.findBlockByType(getSectionBlockType(sectionId));
+    if (!sectionBlock) return 0;
+
+    const candidates = [sectionBlock, ...this.collectSectionBlocksByType(sectionId)];
+    let bottom = 0;
+    let sectionBaseBottom = 0;
+
+    for (const block of candidates) {
+      if (!block || typeof block.getRelativeToSurfaceXY !== "function") continue;
+      if (typeof block.isVisible === "function" && !block.isVisible()) continue;
+      const position = block.getRelativeToSurfaceXY() ?? { x: 0, y: 0 };
+      const size = typeof block.getHeightWidth === "function" ? block.getHeightWidth() : null;
+      const height = Number(size?.height) > 0 ? Number(size.height) : 88;
+      const currentBottom = position.y + height;
+      bottom = Math.max(bottom, currentBottom);
+      if (block === sectionBlock) {
+        sectionBaseBottom = currentBottom;
+      }
+    }
+
+    const adjustment = this.getSectionHeightAdjustment(sectionId);
+    if (adjustment <= 0) return bottom;
+    return Math.max(sectionBaseBottom, bottom - adjustment);
+  }
+
+  private getSectionHeightAdjustment(sectionId: SectionId): number {
+    if (sectionId === "conditions") return 120;
+    if (sectionId === "restart") return 72;
+    return 0;
+  }
+
   private buildSectionsSnapshot(): SectionSnapshot[] {
     if (!this.workspace) return [];
 
@@ -4896,6 +5089,8 @@ class BotBuilderApp {
         exit: null,
         management: null,
         variables: [],
+        text: [],
+        time: [],
         notifications: null,
         stats: [],
         logic: [],
@@ -4911,16 +5106,36 @@ class BotBuilderApp {
   }
 
   private normalizeAllSections(): void {
-    for (const section of SECTION_DEFINITIONS) {
-      this.normalizeSection(section.id as SectionId);
-    }
-  }
+    if (!this.workspace) return;
 
-  private normalizeConditionBlocks(): void {
+    let yCursor = WORKSPACE_SECTION_TOP;
+    for (const section of SECTION_DEFINITIONS) {
+      const sectionId = section.id as SectionId;
+      const sectionBlock = this.findBlockByType(getSectionBlockType(sectionId));
+      if (!sectionBlock) continue;
+
+      const current = sectionBlock.getRelativeToSurfaceXY?.() ?? { x: 0, y: 0 };
+      sectionBlock.moveBy(WORKSPACE_SECTION_LEFT - current.x, yCursor - current.y);
+      this.placeSectionBlocks(sectionId);
+
+      yCursor = this.getNextSectionTop(yCursor, this.getSectionBottom(sectionId));
+    }
+
+    try {
+      this.workspace.render();
+      this.workspace.resize();
+    } catch (error) {
+      console.error("Workspace normalize failed:", error);
+    }
   }
 
   private normalizeSection(sectionId: SectionId): void {
     this.placeSectionBlocks(sectionId);
+  }
+
+  private getNextSectionTop(currentTop: number, sectionBottom: number): number {
+    void sectionBottom;
+    return currentTop + WORKSPACE_SECTION_STACK_STEP;
   }
 
   private refreshAllPanels(): void {
@@ -4937,6 +5152,15 @@ class BotBuilderApp {
     const payloadEl = this.root.querySelector<HTMLElement>("#bb-payload-json");
     const resultsEl = this.root.querySelector<HTMLElement>("#bb-results");
 
+    const management = snapshot.conditions?.management as Record<string, unknown> | null | undefined;
+    const repeatRunsRaw = management?.repeatRuns;
+    const repeatRunsValue =
+      typeof repeatRunsRaw === "number" || typeof repeatRunsRaw === "string" || typeof repeatRunsRaw === "boolean"
+        ? repeatRunsRaw
+        : this.defaultRepeatRuns;
+    const repeatRuns = management ? Math.max(1, Math.floor(asNumber(repeatRunsValue, this.defaultRepeatRuns))) : 1;
+    const sessionPayload = this.buildSessionTradePayload(snapshot, repeatRuns);
+
     const validation = validationService.validateStrategy({
       market: snapshot.market as any,
       execution: snapshot.execution as any,
@@ -4944,9 +5168,10 @@ class BotBuilderApp {
       conditions: snapshot.conditions as any,
       restart: snapshot.restart as any,
     });
-    const payloadValidationErrors = snapshot.apiPayload ? this.validatePayloadAgainstMetadata(snapshot.apiPayload) : ["Build market and execution blocks first."];
+    const payloadValidationErrors = sessionPayload ? this.validatePayloadAgainstMetadata(sessionPayload) : ["Build market and execution blocks first."];
     const combinedValidationErrors = [...validation.errors, ...payloadValidationErrors.filter((error) => !validation.errors.includes(error))];
-    const combinedWarnings = validation.warnings ?? [];
+    const conditionWarnings = this.lastConditionReport?.warnings ?? [];
+    const combinedWarnings = [...(validation.warnings ?? []), ...conditionWarnings.filter((warning) => !(validation.warnings ?? []).includes(warning))];
     const ready = combinedValidationErrors.length === 0;
 
     if (jsonEl) {
@@ -4954,7 +5179,7 @@ class BotBuilderApp {
     }
 
     if (payloadEl) {
-      payloadEl.textContent = snapshot.apiPayload ? formatJson(snapshot.apiPayload) : "// Incomplete strategy";
+      payloadEl.textContent = sessionPayload ? formatJson(sessionPayload) : "// Incomplete strategy";
     }
 
     if (statusPill) {
@@ -4989,6 +5214,86 @@ class BotBuilderApp {
           <div class="bb-result-list">${combinedValidationErrors.map((error) => `<div>${error}</div>`).join("")}</div>
         `;
     }
+
+    this.renderConditionEnginePanel(snapshot, sessionPayload);
+  }
+
+  private renderConditionEnginePanel(snapshot: StrategySnapshot | null, sessionPayload: Record<string, unknown> | null): void {
+    const panel = this.root.querySelector<HTMLElement>("#bb-condition-engine");
+    if (!panel) return;
+
+    const report = this.lastConditionReport;
+    const rules = report?.ruleResults ?? [];
+    const formatMoment = (value: number | null | undefined): string => {
+      if (value == null || !Number.isFinite(value)) return "n/a";
+      return new Date(value).toLocaleString(undefined, {
+        hour12: false,
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+    };
+    const entries = rules.length
+      ? rules.map((rule) => {
+          const state = rule.satisfied ? "ready" : "waiting";
+          const tone = rule.satisfied ? "is-ready" : rule.warning ? "is-error" : "is-running";
+          return `
+            <div class="bb-engine-row ${tone}">
+              <strong>${escapeHtml(rule.label)}</strong>
+              <span>${escapeHtml(state)}</span>
+            </div>
+            <div class="bb-engine-detail">${escapeHtml(rule.detail)}</div>
+            <div class="bb-engine-meta">
+              <span>Evaluated ${escapeHtml(formatMoment(rule.evaluatedAtMs))}</span>
+              <span>Tick ${escapeHtml(formatMoment(rule.lastTickTimeMs))}</span>
+              <span>Price ${escapeHtml(rule.lastTickPrice == null ? "n/a" : String(rule.lastTickPrice))}</span>
+            </div>
+            ${rule.warning ? `<div class="bb-engine-warning">${escapeHtml(rule.warning)}</div>` : ""}
+          `;
+        }).join("")
+      : `<div class="bb-engine-empty">No rule activity yet.</div>`;
+
+    const summary = report
+      ? `
+        <div class="bb-engine-summary">
+          <div><strong>Ready</strong><span>${report.ready ? "yes" : "no"}</span></div>
+          <div><strong>Satisfied</strong><span>${report.satisfiedRules}/${report.activeRules}</span></div>
+          <div><strong>Triggers</strong><span>${report.concurrentTriggers.length > 0 ? report.concurrentTriggers.join(", ") : "none"}</span></div>
+        </div>
+      `
+      : `<div class="bb-engine-empty">Connect and run to see live rule state.</div>`;
+
+    const payloadHint = sessionPayload
+      ? `<div class="bb-engine-hint">Payload stake: ${escapeHtml(String(sessionPayload.stake ?? ""))}</div>`
+      : "";
+    const blockedBy = report?.blockedBy ?? [];
+    const blockedSection = blockedBy.length
+      ? `
+        <div class="bb-engine-blocked">
+          <div class="bb-engine-blocked-title">Blocked by</div>
+          ${blockedBy.map((rule) => `
+            <div class="bb-engine-blocked-row">
+              <strong>${escapeHtml(rule.label)}</strong>
+              <span>${escapeHtml(rule.detail)}</span>
+            </div>
+          `).join("")}
+        </div>
+      `
+      : "";
+
+    panel.innerHTML = `
+      ${summary}
+      ${payloadHint}
+      ${blockedSection}
+      <div class="bb-engine-rules">
+        ${entries}
+      </div>
+      ${report?.warnings?.length
+        ? `<div class="bb-engine-warning-list">${report.warnings.map((warning) => `<div>${escapeHtml(warning)}</div>`).join("")}</div>`
+        : ""}
+    `;
   }
 
   private serializeWorkspaceXml(): string | null {
@@ -5082,6 +5387,68 @@ class BotBuilderApp {
         ? repeatRunsRaw
         : this.defaultRepeatRuns;
     const repeatRuns = management ? Math.max(1, Math.floor(asNumber(repeatRunsValue, this.defaultRepeatRuns))) : 1;
+    const sessionPayload = this.buildSessionTradePayload(snapshot, repeatRuns);
+    if (!sessionPayload) {
+      const message = "Unable to build a session payload for this strategy.";
+      if (statusPill) {
+        statusPill.className = "bb-status-pill is-error";
+        statusPill.textContent = "Blocked";
+      }
+      if (statusCaption) {
+        statusCaption.textContent = message;
+      }
+      if (resultsEl) {
+        resultsEl.innerHTML = `<div class="bb-result-error">${message}</div>`;
+      }
+      return;
+    }
+    const totalStakeBudget = this.toFiniteNumber(snapshot.execution?.stake ?? sessionPayload.stake ?? 0) ?? 0;
+    const lossThresholdRaw = management?.lossThreshold;
+    const lossThresholdValue =
+      typeof lossThresholdRaw === "number" || typeof lossThresholdRaw === "string" || typeof lossThresholdRaw === "boolean"
+        ? lossThresholdRaw
+        : Number.POSITIVE_INFINITY;
+    const lossThreshold = management ? asNumber(lossThresholdValue, Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
+    const entryState = this.conditionEngine.beginSession(snapshot, {
+      nowMs: Date.now(),
+      latestTick: this.latestTick,
+      currentTradeActive: false,
+      currentTradeOutcome: this.currentTradeOutcome,
+      currentRepeatRun: this.currentRepeatRun || 1,
+      totalRepeatRuns: repeatRuns,
+      currentRunStake: totalStakeBudget / Math.max(1, repeatRuns),
+      sessionStakeBudget: totalStakeBudget,
+      sessionLossSpent: this.sessionLossSpent,
+      sessionLossThreshold: lossThreshold,
+      sessionProfitSpent: this.sessionProfitSpent,
+      tradeStartedAtMs: null,
+      contractActivatedAtMs: null,
+    });
+
+    this.lastConditionReport = entryState;
+    this.activeTradeSnapshot = snapshot;
+    this.startTradeSession(repeatRuns, totalStakeBudget, lossThreshold, preserveAutoRestartState);
+
+    if (!entryState.entrySatisfied) {
+      this.pendingConditionLaunchSnapshot = snapshot;
+      if (statusPill) {
+        statusPill.className = "bb-status-pill is-running";
+        statusPill.textContent = "Waiting";
+      }
+      if (statusCaption) {
+        const message = entryState.warnings.length > 0
+          ? entryState.warnings.join(" ")
+          : entryState.notes.join(" ") || "Waiting for entry conditions to be satisfied.";
+        statusCaption.textContent = message;
+      }
+      if (resultsEl) {
+        resultsEl.innerHTML = `
+          <div class="bb-result-ok">Session armed and waiting for entry conditions.</div>
+          <div class="bb-result-list">${entryState.ruleResults.map((rule) => `<div>${rule.label}: ${rule.satisfied ? "ready" : "waiting"}</div>`).join("")}</div>
+        `;
+      }
+      return;
+    }
 
     if (statusPill) {
       statusPill.className = "bb-status-pill is-ready";
@@ -5094,27 +5461,56 @@ class BotBuilderApp {
       resultsEl.innerHTML = `
         <div class="bb-result-ok">Starting contract lifecycle...</div>
         <div class="bb-result-meta">
-          <div><strong>Symbol</strong><span>${safeString(payload?.symbol ?? DEFAULT_SYMBOL)}</span></div>
-          <div><strong>Contract</strong><span>${safeString(payload?.contract_type ?? "UP")}</span></div>
-          <div><strong>Stake</strong><span>${String(payload?.stake ?? 10)}</span></div>
+          <div><strong>Symbol</strong><span>${safeString(sessionPayload?.symbol ?? DEFAULT_SYMBOL)}</span></div>
+          <div><strong>Contract</strong><span>${safeString(sessionPayload?.contract_type ?? "UP")}</span></div>
+          <div><strong>Stake</strong><span>${String(sessionPayload?.stake ?? 0.5)}</span></div>
         </div>
       `;
     }
 
-    this.startTradeSession(repeatRuns, preserveAutoRestartState);
-    this.activeTradeSnapshot = snapshot;
+    if (!sessionPayload) {
+      const message = "Unable to build a session payload for this strategy.";
+      if (statusPill) {
+        statusPill.className = "bb-status-pill is-error";
+        statusPill.textContent = "Blocked";
+      }
+      if (statusCaption) {
+        statusCaption.textContent = message;
+      }
+      if (resultsEl) {
+        resultsEl.innerHTML = `<div class="bb-result-error">${message}</div>`;
+      }
+      return;
+    }
     this.resetTradeRuntimeState(true);
+    this.activeTradeSnapshot = snapshot;
+    this.startTradeSession(repeatRuns, totalStakeBudget, lossThreshold, preserveAutoRestartState);
+    this.lastConditionReport = this.conditionEngine.beginSession(snapshot, {
+      nowMs: Date.now(),
+      latestTick: this.latestTick,
+      currentTradeActive: false,
+      currentTradeOutcome: this.currentTradeOutcome,
+      currentRepeatRun: this.currentRepeatRun || 1,
+      totalRepeatRuns: repeatRuns,
+      currentRunStake: totalStakeBudget / Math.max(1, repeatRuns),
+      sessionStakeBudget: totalStakeBudget,
+      sessionLossSpent: this.sessionLossSpent,
+      sessionLossThreshold: lossThreshold,
+      sessionProfitSpent: this.sessionProfitSpent,
+      tradeStartedAtMs: null,
+      contractActivatedAtMs: null,
+    });
     this.appendWsEventLog("run", {
-      symbol: payload.symbol ?? DEFAULT_SYMBOL,
-      contract_type: payload.contract_type ?? "UP",
-      duration: payload.duration ?? 5,
-      duration_unit: payload.duration_unit ?? "t",
+      symbol: sessionPayload.symbol ?? DEFAULT_SYMBOL,
+      contract_type: sessionPayload.contract_type ?? "UP",
+      duration: sessionPayload.duration ?? 5,
+      duration_unit: sessionPayload.duration_unit ?? "t",
     });
 
     try {
-      const orderData = await this.runLiveTrade(payload);
+      const orderData = await this.runLiveTrade(sessionPayload);
       this.currentTradeContractId = this.toTradeId(orderData.contract_id ?? orderData.contractId) ?? null;
-      const lifecycle = this.buildTradeLifecycle(payload, orderData);
+      const lifecycle = this.buildTradeLifecycle(sessionPayload, orderData);
       const progressLabel = this.getRepeatProgressLabel();
       this.setCurrentLifecycle(lifecycle, `${progressLabel} - Demo trade request sent`, "Waiting for websocket order, activation, and settlement events.");
       const contractId = this.currentTradeContractId ?? "pending";
@@ -5128,7 +5524,7 @@ class BotBuilderApp {
       if (statusCaption) {
         statusCaption.textContent = `${progressLabel}. Order request sent. Waiting for activation and settlement from the feed.`;
       }
-      this.updateFeedStatus(`Trade request sent on ${String(sessionType)} account #${contractId}. Payout ${String(payout)}.`);
+      this.updateFeedStatus(`Trade request sent on ${String(sessionType)} account #${contractId}. Payout ${String(payout)}. Stake per run ${String(sessionPayload.stake ?? 0)}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Trade execution failed";
       if (statusPill) {

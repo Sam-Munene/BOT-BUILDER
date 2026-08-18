@@ -96,6 +96,8 @@ export interface Conditions {
   exits?: Condition[];
   management?: TradeManagement | null;
   variables?: StrategyVariable[];
+  text?: Record<string, unknown>[];
+  time?: Record<string, unknown>[];
   notifications?: NotificationSettings | null;
   stats?: StrategyStat[];
   logic?: Record<string, any>[];

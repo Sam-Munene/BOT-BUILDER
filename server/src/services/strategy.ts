@@ -78,6 +78,11 @@ export class StrategyService {
         stats: [],
         purchase: null,
         sell: null,
+        text: [],
+        time: [],
+        math: [],
+        lists: [],
+        logic: [],
       },
       restart: {
         condition: null,
@@ -247,6 +252,23 @@ export class StrategyService {
         op: match[1],
         name: match[2],
         raw: match[3] ?? '',
+      }));
+    }
+
+    const textMatches = [...code.matchAll(/__BOT_BUILDER_TEXT\.push\(\{\s*op:\s*"([^"]*)"[^}]*text1:\s*(".*?"|[^,}]+)[^}]*text2:\s*(".*?"|[^}]+)\s*\}\);?/g)];
+    if (textMatches.length > 0) {
+      strategy.conditions.text = textMatches.map((match) => ({
+        op: match[1],
+        text1: match[2],
+        text2: match[3],
+      }));
+    }
+
+    const timeMatches = [...code.matchAll(/__BOT_BUILDER_TIME\.push\(\{\s*op:\s*"([^"]*)"([^}]*)\}\);?/g)];
+    if (timeMatches.length > 0) {
+      strategy.conditions.time = timeMatches.map((match) => ({
+        op: match[1],
+        raw: match[2] ?? '',
       }));
     }
 

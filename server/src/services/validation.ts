@@ -57,6 +57,8 @@ export class ValidationService {
     if (strategy.conditions) {
       const conditionErrors = this.validateConditions(strategy.conditions);
       errors.push(...conditionErrors);
+      const conditionWarnings = this.validateConditionCompatibility(strategy.conditions);
+      warnings.push(...conditionWarnings);
     }
 
     if (strategy.indicators) {
@@ -307,6 +309,66 @@ export class ValidationService {
     }
 
     return errors;
+  }
+
+  /**
+   * Warn about condition combinations that are likely confusing or contradictory.
+   */
+  private validateConditionCompatibility(conditions: Conditions): string[] {
+    const warnings: string[] = [];
+    const entry = conditions.entry ?? conditions.purchase ?? null;
+    const exit = conditions.exit ?? conditions.sell ?? null;
+    const entryType = String(entry?.type ?? '').trim().toUpperCase();
+    const exitType = String(exit?.type ?? '').trim().toUpperCase();
+    const timeTypes = new Set(['TIME_OF_DAY', 'DURATION_ELAPSED']);
+    const thresholdTypes = new Set(['LOSS_THRESHOLD', 'PROFIT_THRESHOLD', 'STOP_LOSS_HIT', 'TAKE_PROFIT_HIT']);
+    const hasManagementThresholds = Boolean(
+      conditions.management &&
+      (conditions.management.lossThreshold != null || conditions.management.profitThreshold != null)
+    );
+
+    const entryIsTime = timeTypes.has(entryType);
+    const exitIsTime = timeTypes.has(exitType);
+    const entryIsThreshold = thresholdTypes.has(entryType);
+    const exitIsThreshold = thresholdTypes.has(exitType);
+
+    if (!entryType && !exitType) {
+      return warnings;
+    }
+
+    if (entryType === 'ALWAYS' && exitType === 'ALWAYS') {
+      warnings.push('Entry and exit are both ALWAYS; the session may keep firing until management or restart rules stop it.');
+    }
+
+    if (entryType === 'HAS_POSITION' && exitType === 'HAS_POSITION') {
+      warnings.push('Entry and exit both require a position; this can keep the engine in a waiting loop.');
+    }
+
+    if (entryType === 'NO_POSITION' && exitType === 'NO_POSITION') {
+      warnings.push('Entry and exit both require no position; the strategy may never progress past the waiting state.');
+    }
+
+    if ((entryType === 'HAS_POSITION' && exitType === 'NO_POSITION') || (entryType === 'NO_POSITION' && exitType === 'HAS_POSITION')) {
+      warnings.push('Entry and exit position rules point in opposite directions; double-check that this is intentional.');
+    }
+
+    if ((entryIsTime && exitIsThreshold) || (exitIsTime && entryIsThreshold)) {
+      warnings.push('You are mixing time-based and threshold-based conditions; make sure the launch and exit rules are meant to compete together.');
+    }
+
+    if ((entryIsTime || exitIsTime) && hasManagementThresholds) {
+      warnings.push('Time-based conditions are combined with management thresholds; the live engine will evaluate both, so confirm the threshold scope is intentional.');
+    }
+
+    if (conditions.management && (entryType === 'LOSS_THRESHOLD' || entryType === 'PROFIT_THRESHOLD')) {
+      warnings.push('Management thresholds and entry thresholds are both active; ensure the duplicate limits are intentional.');
+    }
+
+    if (entryIsTime && exitIsTime) {
+      warnings.push('Both entry and exit are time-based. That is valid, but it can leave the strategy idle until both clocks align.');
+    }
+
+    return warnings;
   }
 
   /**

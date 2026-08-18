@@ -523,6 +523,125 @@ button {
   line-height: 1.55;
 }
 
+.bb-condition-engine {
+  display: grid;
+  gap: 10px;
+  color: var(--bb-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.bb-engine-summary {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.bb-engine-summary > div,
+.bb-engine-hint,
+.bb-engine-empty,
+.bb-engine-warning-list,
+.bb-engine-row,
+.bb-engine-detail,
+.bb-engine-warning {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: #ffffff;
+}
+
+.bb-engine-summary strong,
+.bb-engine-row strong {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+
+.bb-engine-rules {
+  display: grid;
+  gap: 8px;
+}
+
+.bb-engine-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: -2px;
+  color: var(--bb-muted);
+  font-size: 11px;
+}
+
+.bb-engine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bb-engine-row.is-ready {
+  border-color: rgba(22, 163, 74, 0.2);
+  background: rgba(220, 252, 231, 0.5);
+}
+
+.bb-engine-row.is-running {
+  border-color: rgba(37, 99, 235, 0.18);
+  background: rgba(219, 234, 254, 0.4);
+}
+
+.bb-engine-row.is-error {
+  border-color: rgba(239, 68, 68, 0.18);
+  background: rgba(254, 226, 226, 0.55);
+}
+
+.bb-engine-detail,
+.bb-engine-warning {
+  margin-top: 6px;
+  color: var(--bb-muted);
+}
+
+.bb-engine-warning {
+  color: #b45309;
+  background: rgba(254, 243, 199, 0.75);
+}
+
+.bb-engine-blocked {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  background: rgba(254, 226, 226, 0.45);
+}
+
+.bb-engine-blocked-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 900;
+  color: #991b1b;
+}
+
+.bb-engine-blocked-row {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.bb-engine-blocked-row strong {
+  font-size: 12px;
+}
+
+.bb-engine-warning-list {
+  display: grid;
+  gap: 6px;
+  color: #92400e;
+  background: rgba(254, 243, 199, 0.45);
+}
+
 .bb-pre {
   margin: 0;
   max-height: 200px;
