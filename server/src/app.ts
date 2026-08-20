@@ -1073,6 +1073,11 @@ class BotBuilderApp {
   private selectedContractType: string = "UP";
   private strategyXml: string | null = null;
   private lastSnapshot: StrategySnapshot | null = null;
+  private lastSnapshotSignature = "";
+  private lastSnapshotUpdatedAt = "";
+  private lastStrategyJsonText = "";
+  private lastPayloadJsonText = "";
+  private lastConditionEngineHtml = "";
   private readonly listeners: Array<() => void> = [];
   private feedSymbols: Array<Record<string, unknown>> = [];
   private feedAuthenticated = false;
@@ -3539,6 +3544,10 @@ class BotBuilderApp {
       this.syncingContractMetadata = false;
       if (needsExecutionHelperSync) {
         this.syncExecutionHelperVisibility();
+        const executionBlocks = this.collectSectionBlocksByType("execution");
+        this.placeSectionBlocks("execution", executionBlocks);
+        this.connectSectionBlocks("execution", executionBlocks);
+        this.refreshAllPanels();
       }
     }
   }
@@ -5084,12 +5093,13 @@ class BotBuilderApp {
     const allBlocks = sections.flatMap((section) => section.blocks);
     const domain = convertBlocksToSnapshot(allBlocks);
     const apiPayload = createApiPayload(domain as StrategySnapshot);
+    const updatedAt = new Date().toISOString();
 
-    return {
+    const snapshot: StrategySnapshot = {
       meta: {
         botName: "Volatility Blueprint",
         mode: "draft",
-        updatedAt: new Date().toISOString(),
+        updatedAt,
       },
       market: (domain.market as Record<string, unknown> | undefined) ?? null,
       execution: (domain.execution as Record<string, unknown> | undefined) ?? null,
@@ -5113,6 +5123,23 @@ class BotBuilderApp {
       sections,
       apiPayload,
     };
+
+    const snapshotSignature = JSON.stringify({
+      ...snapshot,
+      meta: {
+        botName: snapshot.meta.botName,
+        mode: snapshot.meta.mode,
+      },
+    });
+
+    if (snapshotSignature === this.lastSnapshotSignature && this.lastSnapshotUpdatedAt) {
+      snapshot.meta.updatedAt = this.lastSnapshotUpdatedAt;
+    } else {
+      this.lastSnapshotSignature = snapshotSignature;
+      this.lastSnapshotUpdatedAt = snapshot.meta.updatedAt;
+    }
+
+    return snapshot;
   }
 
   private normalizeAllSections(): void {
@@ -5170,6 +5197,8 @@ class BotBuilderApp {
         : this.defaultRepeatRuns;
     const repeatRuns = management ? Math.max(1, Math.floor(asNumber(repeatRunsValue, this.defaultRepeatRuns))) : 1;
     const sessionPayload = this.buildSessionTradePayload(snapshot, repeatRuns);
+    const strategyJson = formatJson(snapshot);
+    const payloadJson = sessionPayload ? formatJson(sessionPayload) : "// Incomplete strategy";
 
     const validation = validationService.validateStrategy({
       market: snapshot.market as any,
@@ -5184,12 +5213,14 @@ class BotBuilderApp {
     const combinedWarnings = [...(validation.warnings ?? []), ...conditionWarnings.filter((warning) => !(validation.warnings ?? []).includes(warning))];
     const ready = combinedValidationErrors.length === 0;
 
-    if (jsonEl) {
-      jsonEl.textContent = formatJson(snapshot);
+    if (jsonEl && this.lastStrategyJsonText !== strategyJson) {
+      jsonEl.textContent = strategyJson;
+      this.lastStrategyJsonText = strategyJson;
     }
 
-    if (payloadEl) {
-      payloadEl.textContent = sessionPayload ? formatJson(sessionPayload) : "// Incomplete strategy";
+    if (payloadEl && this.lastPayloadJsonText !== payloadJson) {
+      payloadEl.textContent = payloadJson;
+      this.lastPayloadJsonText = payloadJson;
     }
 
     if (statusPill) {
@@ -5293,7 +5324,7 @@ class BotBuilderApp {
       `
       : "";
 
-    panel.innerHTML = `
+    const nextHtml = `
       ${summary}
       ${payloadHint}
       ${blockedSection}
@@ -5304,6 +5335,11 @@ class BotBuilderApp {
         ? `<div class="bb-engine-warning-list">${report.warnings.map((warning) => `<div>${escapeHtml(warning)}</div>`).join("")}</div>`
         : ""}
     `;
+
+    if (this.lastConditionEngineHtml !== nextHtml) {
+      panel.innerHTML = nextHtml;
+      this.lastConditionEngineHtml = nextHtml;
+    }
   }
 
   private serializeWorkspaceXml(): string | null {
