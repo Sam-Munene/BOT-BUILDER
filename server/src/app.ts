@@ -78,6 +78,21 @@ type TradeLifecycleStage = {
   rawPayload?: Record<string, unknown> | null;
 };
 
+type TradeRuntimeSession = {
+  sessionId: string;
+  contractId: string | null;
+  stages: TradeLifecycleStage[];
+  heading: string;
+  subheading: string;
+  outcome: TradeOutcome | null;
+  settledAtMs: number | null;
+  snapshot: StrategySnapshot;
+  repeatRun: number;
+  totalRepeatRuns: number;
+  runStake: number;
+  createdAt: number;
+};
+
 type WsEventLogEntry = {
   at: number;
   event: string;
@@ -1088,6 +1103,8 @@ class BotBuilderApp {
   private currentLifecycleSubheading = "";
   private currentTradeOutcome: TradeOutcome | null = null;
   private currentTradeContractId: string | null = null;
+  private readonly activeTradeSessions: Map<string, TradeRuntimeSession> = new Map();
+  private readonly pendingTradeSessions: TradeRuntimeSession[] = [];
   private activeTradeSnapshot: StrategySnapshot | null = null;
   private currentRepeatRun = 0;
   private totalRepeatRuns = 1;
@@ -1109,8 +1126,11 @@ class BotBuilderApp {
   private syncingConditionHelpers = false;
   private pendingContractSyncTimer: number | null = null;
   private pendingAutoRestartTimer: number | null = null;
+  private pendingSettledCleanupTimer: number | null = null;
   private remainingAutoRestarts = 0;
   private readonly defaultRepeatRuns = 5;
+  private readonly maxConcurrentTrades = 3;
+  private readonly settledSessionGraceMs = 3000;
   private readonly conditionEngine = new ConditionRuntimeEngine();
   private lastConditionReport: ConditionEngineReport | null = null;
   private pendingConditionLaunchSnapshot: StrategySnapshot | null = null;
@@ -1526,7 +1546,7 @@ class BotBuilderApp {
       });
       this.renderSymbolOptions(this.feedSymbols);
       this.syncSymbolDropdowns();
-      if (this.currentTradeOutcome === null && this.currentLifecycle) {
+      if (this.currentTradeOutcome === null && this.getLiveTradeSessions().length > 0) {
         this.updateFeedStatus(`Trade running. Loaded ${this.feedSymbols.length} symbols.`);
       } else if (this.currentTradeOutcome === null) {
         this.updateFeedStatus(`Loaded ${this.feedSymbols.length} symbols`);
@@ -1546,30 +1566,32 @@ class BotBuilderApp {
       this.handleProposalDefaultsPayload(payload);
     };
     const handleTick = (tick: Record<string, unknown>) => {
-      if (this.currentTradeOutcome !== null) return;
-      if (!this.currentLifecycle && !this.pendingConditionLaunchSnapshot) return;
+      const liveSessions = this.getLiveTradeSessions();
+      if (this.currentTradeOutcome !== null && liveSessions.length === 0) return;
+      if (liveSessions.length === 0 && !this.pendingConditionLaunchSnapshot) return;
       this.latestTick = tick;
       this.appendWsEventLog("tick", tick);
       this.lastConditionReport = this.conditionEngine.ingestTick(tick, {
         nowMs: Date.now(),
-        currentTradeActive: this.currentTradeOutcome === null && (Boolean(this.currentLifecycle) || Boolean(this.pendingConditionLaunchSnapshot)),
+        currentTradeActive: liveSessions.length > 0 || Boolean(this.pendingConditionLaunchSnapshot),
         currentTradeOutcome: this.currentTradeOutcome,
-        currentRepeatRun: this.currentRepeatRun || 1,
-        totalRepeatRuns: this.totalRepeatRuns || 1,
+        currentRepeatRun: this.currentRepeatRun || Math.max(1, liveSessions.length),
+        totalRepeatRuns: this.totalRepeatRuns || Math.max(1, liveSessions.length),
         currentRunStake: this.currentRunStake,
         sessionStakeBudget: this.sessionStakeBudget,
         sessionLossSpent: this.sessionLossSpent,
         sessionLossThreshold: this.sessionLossThreshold,
         sessionProfitSpent: this.sessionProfitSpent,
       });
-      if (this.pendingConditionLaunchSnapshot && this.lastConditionReport.entrySatisfied && !this.currentLifecycle) {
+      if (this.pendingConditionLaunchSnapshot && this.lastConditionReport.entrySatisfied && liveSessions.length === 0) {
         const snapshot = this.pendingConditionLaunchSnapshot;
         this.pendingConditionLaunchSnapshot = null;
         void this.runStrategy({ preserveAutoRestartState: false, snapshot });
       }
     };
     const handleOrder = (message: Record<string, unknown>) => {
-      if (!this.currentLifecycle) return;
+      const session = this.getTradeSessionByContractId(this.toTradeId(message.contract_id ?? message.contractId));
+      if (!session) return;
       this.appendWsEventLog("order", message);
       this.lastConditionReport = this.conditionEngine.ingestLifecycleEvent("order", message, {
         nowMs: Date.now(),
@@ -1583,15 +1605,19 @@ class BotBuilderApp {
         sessionLossThreshold: this.sessionLossThreshold,
         sessionProfitSpent: this.sessionProfitSpent,
       });
-      this.applyLifecycleEvent("order", message);
+      this.applyLifecycleEventForSession(session, "order", message);
+      this.syncAggregateTradeState();
     };
     const handleContractCreated = (message: Record<string, unknown>) => {
-      if (!this.currentLifecycle) return;
+      const session = this.getTradeSessionByContractId(this.toTradeId(message.contract_id ?? message.contractId));
+      if (!session) return;
       this.appendWsEventLog("contract_created", message);
-      this.applyLifecycleEvent("order", message);
+      this.applyLifecycleEventForSession(session, "order", message);
+      this.syncAggregateTradeState();
     };
     const handleContractActivated = (message: Record<string, unknown>) => {
-      if (!this.currentLifecycle) return;
+      const session = this.getTradeSessionByContractId(this.toTradeId(message.contract_id ?? message.contractId));
+      if (!session) return;
       this.appendWsEventLog("contract_activated", message);
       this.lastConditionReport = this.conditionEngine.ingestLifecycleEvent("activated", message, {
         nowMs: Date.now(),
@@ -1605,10 +1631,12 @@ class BotBuilderApp {
         sessionLossThreshold: this.sessionLossThreshold,
         sessionProfitSpent: this.sessionProfitSpent,
       });
-      this.applyLifecycleEvent("activated", message);
+      this.applyLifecycleEventForSession(session, "activated", message);
+      this.syncAggregateTradeState();
     };
     const handleContractSettled = (message: Record<string, unknown>) => {
-      if (!this.currentLifecycle) return;
+      const session = this.getTradeSessionByContractId(this.toTradeId(message.contract_id ?? message.contractId));
+      if (!session) return;
       this.appendWsEventLog("contract_settled", message);
       this.lastConditionReport = this.conditionEngine.ingestLifecycleEvent("expiry", message, {
         nowMs: Date.now(),
@@ -1622,17 +1650,20 @@ class BotBuilderApp {
         sessionLossThreshold: this.sessionLossThreshold,
         sessionProfitSpent: this.sessionProfitSpent,
       });
-      this.applyLifecycleEvent("expiry", message);
+      this.applyLifecycleEventForSession(session, "expiry", message);
+      this.syncAggregateTradeState();
     };
     const handleContractDetail = (message: Record<string, unknown>) => {
-      if (!this.currentLifecycle || !this.currentTradeContractId) return;
+      const session = this.getTradeSessionByContractId(this.toTradeId(message.contract_id ?? message.contractId));
+      if (!session) return;
       this.appendWsEventLog("contract_detail", message);
-      this.applyFinalTradeOutcomeFromPayload(message);
+      this.applyFinalTradeOutcomeFromPayload(message, session.contractId);
     };
     const handleContractHistory = (message: Record<string, unknown>) => {
-      if (!this.currentLifecycle || !this.currentTradeContractId) return;
+      const session = this.getTradeSessionByContractId(this.toTradeId(message.contract_id ?? message.contractId));
+      if (!session) return;
       this.appendWsEventLog("contract_history", message);
-      this.applyFinalTradeOutcomeFromPayload(message);
+      this.applyFinalTradeOutcomeFromPayload(message, session.contractId);
     };
     const handleError = (error: unknown) => {
       const message = error instanceof Error ? error.message : typeof error === "string" ? error : "WebSocket error";
@@ -1929,7 +1960,38 @@ class BotBuilderApp {
 
   private updateFeedStatus(message: string): void {
     const status = this.root.querySelector<HTMLElement>("#bb-status-caption");
-    if (status) status.textContent = message;
+    if (status) status.textContent = this.composeFeedStatus(message);
+  }
+
+  private composeFeedStatus(message: string): string {
+    const summary = this.getConcurrentTradeStatusText();
+    return summary ? `${message} • ${summary}` : message;
+  }
+
+  private getConcurrentTradeStatusText(): string | null {
+    const liveSessions = this.getLiveTradeSessions().length;
+    const pendingSessions = this.pendingTradeSessions.filter((session) => session.outcome === null).length;
+    const settledSessions = Array.from(new Set(
+      [...this.activeTradeSessions.values()]
+        .filter((session) => session.outcome !== null)
+        .map((session) => session.sessionId),
+    )).length;
+
+    if (liveSessions <= 1 && pendingSessions === 0 && settledSessions === 0) {
+      return null;
+    }
+
+    const parts: string[] = [];
+    if (liveSessions > 0) {
+      parts.push(`${liveSessions} live`);
+    }
+    if (pendingSessions > 0) {
+      parts.push(`${pendingSessions} pending`);
+    }
+    if (settledSessions > 0) {
+      parts.push(`${settledSessions} settled`);
+    }
+    return `Concurrent trades: ${parts.join(", ")}`;
   }
 
   private setSessionStatus(label: typeof this.sessionStateLabel, note: string): void {
@@ -2143,6 +2205,126 @@ class BotBuilderApp {
     this.renderTradeLifecycle(this.currentLifecycle, heading, subheading);
   }
 
+  private getLiveTradeSessions(): TradeRuntimeSession[] {
+    const seen = new Set<string>();
+    const sessions: TradeRuntimeSession[] = [];
+    for (const session of this.activeTradeSessions.values()) {
+      if (seen.has(session.sessionId)) continue;
+      seen.add(session.sessionId);
+      if (session.outcome === null) {
+        sessions.push(session);
+      }
+    }
+    return sessions;
+  }
+
+  private getTradeSessionByContractId(contractId: string | null): TradeRuntimeSession | null {
+    if (contractId == null) {
+      return this.pendingTradeSessions.find((session) => session.outcome === null) ?? this.getLiveTradeSessions()[0] ?? null;
+    }
+
+    const normalized = String(contractId);
+    for (const session of this.activeTradeSessions.values()) {
+      if (session.contractId != null && String(session.contractId) === normalized) {
+        return session;
+      }
+    }
+
+    return this.pendingTradeSessions[0] ?? null;
+  }
+
+  private registerTradeSession(session: TradeRuntimeSession): void {
+    this.activeTradeSessions.set(session.sessionId, session);
+    if (session.contractId != null) {
+      this.activeTradeSessions.set(session.contractId, session);
+    }
+    this.pendingTradeSessions.push(session);
+    this.currentLifecycle = session.stages.map((stage) => ({ ...stage }));
+    this.currentLifecycleHeading = session.heading;
+    this.currentLifecycleSubheading = session.subheading;
+    this.currentTradeContractId = session.contractId;
+    this.currentTradeOutcome = null;
+    this.renderTradeLifecycle(this.currentLifecycle, session.heading, session.subheading);
+  }
+
+  private syncAggregateTradeState(): void {
+    const liveSessions = this.getLiveTradeSessions();
+    if (liveSessions.length > 0) {
+      this.clearSettledTradeCleanupTimer();
+      this.currentTradeOutcome = null;
+      this.currentTradeContractId = liveSessions.find((session) => session.contractId != null)?.contractId ?? null;
+      return;
+    }
+
+    const settled = Array.from(new Set(
+      [...this.activeTradeSessions.values()]
+        .filter((session) => session.outcome !== null)
+        .map((session) => session.outcome),
+    ));
+    if (settled.length === 0) {
+      this.clearSettledTradeCleanupTimer();
+      this.currentTradeOutcome = null;
+      this.currentTradeContractId = null;
+      return;
+    }
+    this.currentTradeOutcome = settled.includes("lost") ? "lost" : settled.includes("won") ? "won" : "unknown";
+    this.currentTradeContractId = null;
+    this.stopActiveTradeFeed();
+    this.scheduleSettledTradeCleanup();
+  }
+
+  private clearSettledTradeCleanupTimer(): void {
+    if (this.pendingSettledCleanupTimer !== null) {
+      window.clearTimeout(this.pendingSettledCleanupTimer);
+      this.pendingSettledCleanupTimer = null;
+    }
+  }
+
+  private scheduleSettledTradeCleanup(): void {
+    if (this.pendingSettledCleanupTimer !== null) return;
+    this.pendingSettledCleanupTimer = window.setTimeout(() => {
+      this.pendingSettledCleanupTimer = null;
+      if (this.getLiveTradeSessions().length > 0) return;
+      this.activeTradeSessions.clear();
+      this.pendingTradeSessions.length = 0;
+    }, this.settledSessionGraceMs);
+  }
+
+  private applyLifecycleEventForSession(session: TradeRuntimeSession, stageKey: TradeLifecycleStageKey, message: Record<string, unknown>): void {
+    const previousLifecycle = this.currentLifecycle;
+    const previousHeading = this.currentLifecycleHeading;
+    const previousSubheading = this.currentLifecycleSubheading;
+    const previousContractId = this.currentTradeContractId;
+
+    this.currentLifecycle = session.stages.map((stage) => ({ ...stage }));
+    this.currentLifecycleHeading = session.heading;
+    this.currentLifecycleSubheading = session.subheading;
+    this.currentTradeContractId = session.contractId;
+
+    try {
+      this.applyLifecycleEvent(stageKey, message);
+      session.stages = (this.currentLifecycle ?? session.stages).map((stage) => ({ ...stage }));
+      session.heading = this.currentLifecycleHeading;
+      session.subheading = this.currentLifecycleSubheading;
+      const nextContractId = this.toTradeId(
+        session.stages.find((stage) => stage.contractId != null)?.contractId ?? null,
+      );
+      session.contractId = nextContractId;
+      if (session.contractId != null) {
+        this.activeTradeSessions.set(session.contractId, session);
+        const pendingIndex = this.pendingTradeSessions.findIndex((pendingSession) => pendingSession.sessionId === session.sessionId);
+        if (pendingIndex !== -1) {
+          this.pendingTradeSessions.splice(pendingIndex, 1);
+        }
+      }
+    } finally {
+      this.currentLifecycle = previousLifecycle;
+      this.currentLifecycleHeading = previousHeading;
+      this.currentLifecycleSubheading = previousSubheading;
+      this.currentTradeContractId = previousContractId;
+    }
+  }
+
   private findLifecycleStageIndex(key: TradeLifecycleStageKey): number {
     return this.currentLifecycle?.findIndex((stage) => stage.key === key) ?? -1;
   }
@@ -2226,7 +2408,7 @@ class BotBuilderApp {
       this.renderTradeLifecycle(nextStages, "Demo trade settled", "The server confirmed the contract expiry. Waiting for the final contract result.");
       this.updateFeedStatus(`Trade settled${effectiveContractId !== null ? ` for contract ${effectiveContractId}` : ""}. Waiting for result...`);
       this.stopActiveTradeFeed();
-      this.applyFinalTradeOutcomeFromPayload(message);
+      this.applyFinalTradeOutcomeFromPayload(message, effectiveContractId);
       if (effectiveContractId !== null) {
         this.currentTradeContractId = effectiveContractId;
         void this.requestFinalTradeOutcome(effectiveContractId);
@@ -2323,9 +2505,11 @@ class BotBuilderApp {
   private applyFinalTradeOutcome(record: Record<string, unknown>, contractId: string | null = null): void {
     const outcome = this.resolveOutcomeFromRecord(record);
     if (!outcome) return;
-    if (this.currentTradeOutcome !== null) return;
 
-    const tradeDelta = this.getTradeProfitDelta(record, this.currentRunStake || this.sessionStakeBudget);
+    const session = this.getTradeSessionByContractId(contractId);
+    if (!session || session.outcome !== null) return;
+
+    const tradeDelta = this.getTradeProfitDelta(record, session.runStake || this.currentRunStake || this.sessionStakeBudget);
     if (tradeDelta != null && tradeDelta < 0) {
       this.sessionLossSpent += Math.abs(tradeDelta);
     } else if (tradeDelta != null && tradeDelta > 0) {
@@ -2333,9 +2517,12 @@ class BotBuilderApp {
     }
     this.conditionEngine.applyTradeOutcome(outcome, tradeDelta);
 
-    this.currentTradeOutcome = outcome;
+    session.outcome = outcome;
+    session.settledAtMs = Date.now();
     if (contractId !== null) {
+      session.contractId = contractId;
       this.currentTradeContractId = contractId;
+      this.activeTradeSessions.set(contractId, session);
     }
 
     const label = outcome === "won" ? "Demo trade won" : "Demo trade lost";
@@ -2355,24 +2542,27 @@ class BotBuilderApp {
     if (this.currentLifecycle) {
       this.renderTradeLifecycle(this.currentLifecycle, label, subheading);
     }
-    this.stopActiveTradeFeed();
     const lossRemaining = this.getSessionLossRemaining();
     const lossNote = Number.isFinite(lossRemaining) ? ` Loss remaining: ${lossRemaining.toFixed(2)}.` : "";
     this.updateFeedStatus(`${label}${this.currentTradeContractId !== null ? ` for contract ${this.currentTradeContractId}` : ""}.${lossNote}`);
-    this.queueAutoRestart(outcome);
+    this.syncAggregateTradeState();
+    if (this.getLiveTradeSessions().length === 0) {
+      this.stopActiveTradeFeed();
+      this.queueAutoRestart(outcome);
+    }
   }
 
-  private applyFinalTradeOutcomeFromPayload(payload: Record<string, unknown>): void {
-    const record = this.extractOutcomeRecord(payload, this.currentTradeContractId);
+  private applyFinalTradeOutcomeFromPayload(payload: Record<string, unknown>, contractId: string | null = null): void {
+    const record = this.extractOutcomeRecord(payload, contractId ?? this.currentTradeContractId);
     if (record) {
-      this.applyFinalTradeOutcome(record, this.toTradeId(record.contract_id ?? record.contractId ?? record.id) ?? this.currentTradeContractId);
+      this.applyFinalTradeOutcome(record, this.toTradeId(record.contract_id ?? record.contractId ?? record.id) ?? contractId ?? this.currentTradeContractId);
       return;
     }
 
     if (this.resolveOutcomeFromRecord(payload)) {
       this.applyFinalTradeOutcome(
         payload,
-        this.toTradeId(payload.contract_id ?? payload.contractId ?? payload.id) ?? this.currentTradeContractId,
+        this.toTradeId(payload.contract_id ?? payload.contractId ?? payload.id) ?? contractId ?? this.currentTradeContractId,
       );
     }
   }
@@ -3560,12 +3750,16 @@ class BotBuilderApp {
 
   private resetTradeRuntimeState(clearEventLog = false): void {
     this.stopActiveTradeFeed();
+    this.clearSettledTradeCleanupTimer();
+    this.activeTradeSessions.clear();
+    this.pendingTradeSessions.length = 0;
     this.currentLifecycle = null;
     this.currentLifecycleHeading = "";
     this.currentLifecycleSubheading = "";
     this.currentTradeOutcome = null;
     this.currentTradeContractId = null;
     this.latestTick = null;
+    this.sessionLossSpent = 0;
     this.sessionProfitSpent = 0;
     this.lastConditionReport = null;
     this.pendingConditionLaunchSnapshot = null;
@@ -5410,7 +5604,7 @@ class BotBuilderApp {
       return;
     }
 
-    const activeLifecycle = this.currentLifecycle && this.currentTradeOutcome === null;
+    const activeLifecycle = this.getLiveTradeSessions().length > 0;
     if (activeLifecycle && !preserveAutoRestartState) {
       const message = "A trade is already running. Wait for it to settle before starting another run.";
       if (statusPill) {
@@ -5433,7 +5627,8 @@ class BotBuilderApp {
         ? repeatRunsRaw
         : this.defaultRepeatRuns;
     const repeatRuns = management ? Math.max(1, Math.floor(asNumber(repeatRunsValue, this.defaultRepeatRuns))) : 1;
-    const sessionPayload = this.buildSessionTradePayload(snapshot, repeatRuns);
+    const concurrentTradeCount = Math.max(1, Math.min(this.maxConcurrentTrades, repeatRuns));
+    const sessionPayload = this.buildSessionTradePayload(snapshot, concurrentTradeCount);
     if (!sessionPayload) {
       const message = "Unable to build a session payload for this strategy.";
       if (statusPill) {
@@ -5455,14 +5650,20 @@ class BotBuilderApp {
         ? lossThresholdRaw
         : Number.POSITIVE_INFINITY;
     const lossThreshold = management ? asNumber(lossThresholdValue, Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
+
+    if (!preserveAutoRestartState) {
+      this.resetTradeRuntimeState(true);
+    }
+    this.activeTradeSnapshot = snapshot;
+    this.startTradeSession(concurrentTradeCount, totalStakeBudget, lossThreshold, preserveAutoRestartState);
     const entryState = this.conditionEngine.beginSession(snapshot, {
       nowMs: Date.now(),
       latestTick: this.latestTick,
       currentTradeActive: false,
       currentTradeOutcome: this.currentTradeOutcome,
       currentRepeatRun: this.currentRepeatRun || 1,
-      totalRepeatRuns: repeatRuns,
-      currentRunStake: totalStakeBudget / Math.max(1, repeatRuns),
+      totalRepeatRuns: concurrentTradeCount,
+      currentRunStake: totalStakeBudget / Math.max(1, concurrentTradeCount),
       sessionStakeBudget: totalStakeBudget,
       sessionLossSpent: this.sessionLossSpent,
       sessionLossThreshold: lossThreshold,
@@ -5470,10 +5671,7 @@ class BotBuilderApp {
       tradeStartedAtMs: null,
       contractActivatedAtMs: null,
     });
-
     this.lastConditionReport = entryState;
-    this.activeTradeSnapshot = snapshot;
-    this.startTradeSession(repeatRuns, totalStakeBudget, lossThreshold, preserveAutoRestartState);
 
     if (!entryState.entrySatisfied) {
       this.pendingConditionLaunchSnapshot = snapshot;
@@ -5501,7 +5699,7 @@ class BotBuilderApp {
       statusPill.textContent = "Running";
     }
     if (statusCaption) {
-      statusCaption.textContent = "Submitting a demo trade over the websocket connection.";
+      statusCaption.textContent = "Submitting concurrent demo trades over the websocket connection.";
     }
     if (resultsEl) {
       resultsEl.innerHTML = `
@@ -5513,39 +5711,6 @@ class BotBuilderApp {
         </div>
       `;
     }
-
-    if (!sessionPayload) {
-      const message = "Unable to build a session payload for this strategy.";
-      if (statusPill) {
-        statusPill.className = "bb-status-pill is-error";
-        statusPill.textContent = "Blocked";
-      }
-      if (statusCaption) {
-        statusCaption.textContent = message;
-      }
-      if (resultsEl) {
-        resultsEl.innerHTML = `<div class="bb-result-error">${message}</div>`;
-      }
-      return;
-    }
-    this.resetTradeRuntimeState(true);
-    this.activeTradeSnapshot = snapshot;
-    this.startTradeSession(repeatRuns, totalStakeBudget, lossThreshold, preserveAutoRestartState);
-    this.lastConditionReport = this.conditionEngine.beginSession(snapshot, {
-      nowMs: Date.now(),
-      latestTick: this.latestTick,
-      currentTradeActive: false,
-      currentTradeOutcome: this.currentTradeOutcome,
-      currentRepeatRun: this.currentRepeatRun || 1,
-      totalRepeatRuns: repeatRuns,
-      currentRunStake: totalStakeBudget / Math.max(1, repeatRuns),
-      sessionStakeBudget: totalStakeBudget,
-      sessionLossSpent: this.sessionLossSpent,
-      sessionLossThreshold: lossThreshold,
-      sessionProfitSpent: this.sessionProfitSpent,
-      tradeStartedAtMs: null,
-      contractActivatedAtMs: null,
-    });
     this.appendWsEventLog("run", {
       symbol: sessionPayload.symbol ?? DEFAULT_SYMBOL,
       contract_type: sessionPayload.contract_type ?? "UP",
@@ -5554,23 +5719,46 @@ class BotBuilderApp {
     });
 
     try {
-      const orderData = await this.runLiveTrade(sessionPayload);
-      this.currentTradeContractId = this.toTradeId(orderData.contract_id ?? orderData.contractId) ?? null;
-      const lifecycle = this.buildTradeLifecycle(sessionPayload, orderData);
       const progressLabel = this.getRepeatProgressLabel();
-      this.setCurrentLifecycle(lifecycle, `${progressLabel} - Demo trade request sent`, "Waiting for websocket order, activation, and settlement events.");
-      const contractId = this.currentTradeContractId ?? "pending";
-      const payout = orderData.payout ?? orderData.profit ?? "n/a";
-      const sessionType = orderData.session_type ?? "demo";
+      const tradeLaunches = Array.from({ length: concurrentTradeCount }, (_, index) => (async () => {
+        const orderData = await this.runLiveTrade(sessionPayload);
+        const lifecycle = this.buildTradeLifecycle(sessionPayload, orderData);
+        const contractId = this.toTradeId(orderData.contract_id ?? orderData.contractId) ?? null;
+        const session: TradeRuntimeSession = {
+          sessionId: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+          contractId,
+          stages: lifecycle.map((stage) => ({ ...stage })),
+          heading: `${progressLabel} - Demo trade request sent`,
+          subheading: "Waiting for websocket order, activation, and settlement events.",
+          outcome: null,
+          settledAtMs: null,
+          snapshot,
+          repeatRun: index + 1,
+          totalRepeatRuns: concurrentTradeCount,
+          runStake: this.toFiniteNumber(sessionPayload.stake ?? totalStakeBudget / Math.max(1, concurrentTradeCount)) ?? totalStakeBudget / Math.max(1, concurrentTradeCount),
+          createdAt: Date.now(),
+        };
+        this.registerTradeSession(session);
+        this.currentTradeContractId = contractId;
+        const payout = orderData.payout ?? orderData.profit ?? "n/a";
+        const sessionType = orderData.session_type ?? "demo";
+        this.updateFeedStatus(`Trade request sent on ${String(sessionType)} account #${contractId ?? "pending"}. Payout ${String(payout)}. Stake per run ${String(sessionPayload.stake ?? 0)}.`);
+        return { orderData, session };
+      })());
 
+      const tradeResults = await Promise.all(tradeLaunches);
+      const latestTrade = tradeResults[tradeResults.length - 1];
+      if (latestTrade) {
+        const lifecycle = latestTrade.session.stages.map((stage) => ({ ...stage }));
+        this.setCurrentLifecycle(lifecycle, `${progressLabel} - Demo trade request sent`, "Waiting for websocket order, activation, and settlement events.");
+      }
       if (statusPill) {
         statusPill.className = "bb-status-pill is-ready";
         statusPill.textContent = "Trade running";
       }
       if (statusCaption) {
-        statusCaption.textContent = `${progressLabel}. Order request sent. Waiting for activation and settlement from the feed.`;
+        statusCaption.textContent = `${progressLabel}. Concurrent order requests sent. Waiting for activation and settlement from the feed.`;
       }
-      this.updateFeedStatus(`Trade request sent on ${String(sessionType)} account #${contractId}. Payout ${String(payout)}. Stake per run ${String(sessionPayload.stake ?? 0)}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Trade execution failed";
       if (statusPill) {
